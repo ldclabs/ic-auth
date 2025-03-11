@@ -10,4 +10,4 @@ fix:
 	@cargo clippy --fix --workspace --tests
 
 test:
-	@cargo test --workspace -- --nocapture
+	@cargo test --workspace --all-features -- --nocapture

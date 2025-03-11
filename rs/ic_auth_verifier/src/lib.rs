@@ -9,6 +9,7 @@ use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use sha3::Digest;
 
 pub use asn1::*;
+pub use ic_canister_sig_creation::CanisterSigPublicKey;
 
 pub fn verify_basic_sig(
     algorithm_id: Algorithm,

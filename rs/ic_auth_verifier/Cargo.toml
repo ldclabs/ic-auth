@@ -21,8 +21,8 @@ k256 = { workspace = true }
 p256 = { workspace = true }
 ed25519-dalek = { workspace = true }
 ic-canister-sig-creation = { workspace = true }
-ic-signature-verification = { workspace = true }
 simple_asn1 = { workspace = true }
+ic-signature-verification = { workspace = true, optional = true }
 http = { version = "1.2", optional = true }
 base64 = { version = "0.22", optional = true }
 ic-agent = { version = "0.39", optional = true }
@@ -34,6 +34,12 @@ ed25519-consensus = "2.1"
 rand = "0.9"
 
 [features]
-default = ["full"]
+# should not include envelope feature for canister
+default = []
 full = ["envelope"]
-envelope = ["dep:http", "dep:base64", "dep:ic-agent"]
+envelope = [
+  "dep:http",
+  "dep:base64",
+  "dep:ic-agent",
+  "dep:ic-signature-verification",
+]

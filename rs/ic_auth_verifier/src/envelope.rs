@@ -344,9 +344,10 @@ mod tests {
     use super::*;
     use ed25519_consensus::SigningKey;
     use ic_agent::{Identity, identity::BasicIdentity};
+    use ic_canister_sig_creation::CanisterSigPublicKey;
 
     #[test]
-    fn test_user_signature() {
+    fn test_envelope_with_ed25519() {
         let secret = [8u8; 32];
         let sk = SigningKey::from(secret);
         let id = BasicIdentity::from_signing_key(sk);
@@ -363,5 +364,30 @@ mod tests {
 
         se2.digest = sha3_256(b"hello world 2").to_vec().into();
         assert!(se2.verify(unix_ms(), None, None).is_err());
+    }
+
+    #[test]
+    fn test_envelope_with_iccsa() {
+        let msg =
+            const_hex::decode("086c81b03b34184d2365b88a7d94ad9cc0f4e98970b6c10068aae4e407333339")
+                .unwrap();
+        let sig =
+            const_hex::decode("d9d9f7a26b636572746966696361746558a1d9d9f7a26474726565830183024863616e697374657283024a0000000000000001010183024e6365727469666965645f646174618203582053e3b19ab292296b52b451b0662af2d86ac707569b39825fc31f62aca41406d483024474696d6582034387ad4b697369676e61747572655830a95766af95898e1c8492de7b7d9e6c601ea9d9958113f6c0491ef044ed5ebb03d31983abfa40ebbef7068ebaf7e66f05647472656583024373696783025820591047009df12cb39741d672f270045fd15beec2b0b84c1d71bda98b758726cd83025820d37372239856cdf2ae158e5ac365f15501a9e5612a970ddd7b3199c522b54194820340")
+                .unwrap();
+        let pk_der =
+            const_hex::decode("303c300c060a2b0601040183b8430102032c000a000000000000000101011f809d0136deeed8e0187447d20ac0e13e0201e1dede8c437eada3e8dc349f85")
+                .unwrap();
+        let root =
+            const_hex::decode("b90210504fe157d1df412e500ced967ef794dc7aa88c84d764b74b6bc2cf0e575d79f331927df062240c88a28e1802c60b407c7bce541b50310d775919bcd0f799222c3738bc3bcc8bf05af5f52ee2afec54c460bda35c6c379267924db2d374")
+                .unwrap();
+        let (alg, _pk) = user_public_key_from_der(&pk_der).unwrap();
+        assert_eq!(alg, Algorithm::IcCanisterSignature);
+
+        let cspk = CanisterSigPublicKey::try_from(pk_der.as_slice()).unwrap();
+        println!("canister_id: {}", cspk.canister_id.to_text());
+        // canister_id: rrkah-fqaaa-aaaaa-aaaaq-cai
+
+        let res = verify_sig_with_rootkey(&root, &pk_der, &msg, &sig);
+        assert!(res.is_ok());
     }
 }
