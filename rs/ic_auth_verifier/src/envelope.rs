@@ -1,12 +1,14 @@
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use candid::Principal;
+use base64::{
+    Engine,
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+};
+use candid::{CandidType, Principal};
 use ciborium::{from_reader, into_writer};
 use http::header::{HeaderMap, HeaderName};
 use ic_agent::Identity;
-use ic_auth_types::{Delegation, SignedDelegation};
+use ic_auth_types::{ByteBufB64, Delegation, SignedDelegation};
 use ic_canister_sig_creation::delegation_signature_msg;
 use serde::{Deserialize, Serialize};
-use serde_bytes::ByteBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{Algorithm, sha3_256, user_public_key_from_der, verify_basic_sig};
@@ -64,15 +66,18 @@ pub fn verify_sig_with_rootkey(
 }
 
 /// The authentication envelope, which is signed by the sender, and can be verified by `ic_auth_verifier`.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, CandidType, Deserialize, Serialize)]
 pub struct SignedEnvelope {
     /// The public key of the self-signing principal this request is from.
-    pub pubkey: ByteBuf,
+    pub pubkey: ByteBufB64,
+
     /// A cryptographic signature authorizing the request. Not necessarily made by `sender_pubkey`; when delegations are involved,
     /// `sender_sig` is the tail of the delegation chain, and `sender_pubkey` is the head.
-    pub signature: ByteBuf,
+    pub signature: ByteBufB64,
+
     /// the request content's hash digest to sign by sender
-    pub digest: ByteBuf,
+    pub digest: ByteBufB64,
+
     /// The chain of delegations connecting `pubkey` to `signature`, and in that order.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub delegation: Option<Vec<SignedDelegation>>,
@@ -98,7 +103,7 @@ impl SignedEnvelope {
 
     /// Encode the SignedEnvelope into base64_url string
     pub fn to_base64(&self) -> String {
-        URL_SAFE_NO_PAD.encode(self.to_bytes())
+        URL_SAFE.encode(self.to_bytes())
     }
 
     /// Decode the SignedEnvelope from base64_url string
@@ -155,7 +160,7 @@ impl SignedEnvelope {
         expect_digest: Option<&[u8]>,
     ) -> Result<(), String> {
         if let Some(expect_digest) = expect_digest {
-            if self.digest != expect_digest {
+            if self.digest.as_ref() != expect_digest {
                 return Err("Content digest does not match".to_string());
             }
         }

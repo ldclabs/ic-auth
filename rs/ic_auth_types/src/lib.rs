@@ -1,6 +1,11 @@
 use candid::{CandidType, Principal};
 use serde::{Deserialize, Serialize};
-use serde_bytes::ByteBuf;
+
+mod bytes;
+mod xid;
+
+pub use bytes::*;
+pub use xid::*;
 
 /// A delegation from one key to another.
 ///
@@ -9,7 +14,7 @@ use serde_bytes::ByteBuf;
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct Delegation {
     /// The delegated-to key.
-    pub pubkey: ByteBuf,
+    pub pubkey: ByteBufB64,
     /// A nanosecond timestamp after which this delegation is no longer valid.
     pub expiration: u64,
     /// If present, this delegation only applies to requests sent to one of these canisters.
@@ -23,7 +28,7 @@ pub struct SignedDelegation {
     /// The signed delegation.
     pub delegation: Delegation,
     /// The signature for the delegation.
-    pub signature: ByteBuf,
+    pub signature: ByteBufB64,
 }
 
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
@@ -32,7 +37,43 @@ pub struct SignInResponse {
     /// the delegation will no longer be valid.
     pub expiration: u64,
     /// The user canister public key. This key is used to derive the user principal.
-    pub user_key: ByteBuf,
+    pub user_key: ByteBufB64,
     /// seed is a part of the user_key
-    pub seed: ByteBuf,
+    pub seed: ByteBufB64,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_delegation_formart() {
+        let d = Delegation {
+            pubkey: ByteBufB64(vec![1, 2, 3, 4]),
+            expiration: 99,
+            targets: Some(vec![Principal::management_canister()]),
+        };
+
+        let data = serde_json::to_string(&d).unwrap();
+        println!("{}", data);
+        assert_eq!(
+            data,
+            r#"{"pubkey":"AQIDBA==","expiration":99,"targets":["aaaaa-aa"]}"#
+        );
+        let d1: Delegation = serde_json::from_str(&data).unwrap();
+        assert_eq!(d, d1);
+
+        let mut data = Vec::new();
+        ciborium::into_writer(&d, &mut data).unwrap();
+        println!("{}", const_hex::encode(&data));
+        assert_eq!(
+            data,
+            const_hex::decode(
+                "a3667075626b657944010203046a65787069726174696f6e186367746172676574738140"
+            )
+            .unwrap()
+        );
+        let d1: Delegation = ciborium::from_reader(&data[..]).unwrap();
+        assert_eq!(d, d1);
+    }
 }

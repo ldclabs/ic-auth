@@ -10,32 +10,32 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-ic_auth_types = { path = "../ic_auth_types", version = "0.1" }
+ic_auth_types = { path = "../ic_auth_types", version = "0.2" }
 candid = { workspace = true }
+ciborium = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
-ciborium = { workspace = true }
 sha2 = { workspace = true }
 sha3 = { workspace = true }
 k256 = { workspace = true }
 p256 = { workspace = true }
 ed25519-dalek = { workspace = true }
-ic-canister-sig-creation = { workspace = true }
 simple_asn1 = { workspace = true }
+ic-canister-sig-creation = { workspace = true }
 ic-signature-verification = { workspace = true, optional = true }
-http = { version = "1.2", optional = true }
-base64 = { version = "0.22", optional = true }
-ic-agent = { version = "0.39", optional = true }
+http = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
+ic-agent = { workspace = true, optional = true }
 
 [dev-dependencies]
-const-hex = "1"
-ic-agent = "0.39"
-ed25519-consensus = "2.1"
-rand = "0.9"
+const-hex = { workspace = true }
+ic-agent = { workspace = true }
+ed25519-consensus = { workspace = true }
+rand = { workspace = true }
 
 [features]
 # should not include envelope feature for canister
-default = []
+default = ["full"]
 full = ["envelope"]
 envelope = [
   "dep:http",
