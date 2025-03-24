@@ -3,7 +3,7 @@ members = ["rs/ic_auth_types", "rs/ic_auth_verifier"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 repository = "https://github.com/ldclabs/ic-auth"
 keywords = ["config", "cbor", "canister", "icp", "encryption"]
@@ -29,6 +29,6 @@ sha2 = "0.10"
 sha3 = "0.10"
 ic-canister-sig-creation = "1.2"
 ic-signature-verification = "0.2"
-ic-agent = "0.39"
+ic-agent = "0.40"
 simple_asn1 = "0.6"
 xid = "1.1"
