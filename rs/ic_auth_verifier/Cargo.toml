@@ -35,7 +35,7 @@ rand = { workspace = true }
 
 [features]
 # should not include envelope feature for canister
-default = ["full"]
+default = []
 full = ["envelope"]
 envelope = [
   "dep:http",

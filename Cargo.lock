@@ -1089,7 +1089,7 @@ checksum = "8de254dd67bbd58073e23dc1c8553ba12fa1dc610a19de94ad2bbcd0460c067f"
 
 [[package]]
 name = "ic_auth_types"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64",
  "candid",
@@ -1103,7 +1103,7 @@ dependencies = [
 
 [[package]]
 name = "ic_auth_verifier"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "base64",
  "candid",
