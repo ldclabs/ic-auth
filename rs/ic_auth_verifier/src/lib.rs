@@ -67,6 +67,12 @@ pub fn sha3_256(data: &[u8]) -> [u8; 32] {
     hasher.finalize().into()
 }
 
+pub fn keccak256(data: &[u8]) -> [u8; 32] {
+    let mut hasher = sha3::Keccak256::new();
+    hasher.update(data);
+    hasher.finalize().into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

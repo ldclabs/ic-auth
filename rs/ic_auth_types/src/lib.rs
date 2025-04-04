@@ -22,7 +22,7 @@ pub struct Delegation {
     pub targets: Option<Vec<Principal>>,
 }
 
-/// A [`Delegation`] that has been signed by an [`Identity`](https://docs.rs/ic-agent/latest/ic_agent/trait.Identity.html).
+/// SignedDelegation is a [`Delegation`] that has been signed by an [`Identity`](https://docs.rs/ic-agent/latest/ic_agent/trait.Identity.html).
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct SignedDelegation {
     /// The signed delegation.

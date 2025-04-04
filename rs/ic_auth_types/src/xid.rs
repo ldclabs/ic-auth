@@ -4,18 +4,29 @@
 use candid::CandidType;
 use std::{ops::Deref, str::FromStr};
 
+/// Length of the raw XID byte array
 pub const RAW_LEN: usize = 12;
+/// Length of the base32 encoded XID string
 const ENCODED_LEN: usize = 20;
+/// Base32 encoding character set
 const ENC: &[u8] = "0123456789abcdefghijklmnopqrstuv".as_bytes();
+/// Lookup table for decoding base32 characters to their values
 const DEC: [u8; 256] = gen_dec();
 
 /// Represents a unique identifier with 12 bytes.
 /// Based on the xid. See: https://github.com/rs/xid
+///
+/// XID is a globally unique identifier similar to UUID, but uses a more compact
+/// representation (12 bytes vs 16 bytes) and is lexicographically sortable.
+/// It's represented as a 20-character base32 string when serialized to text.
 #[derive(CandidType, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Xid(pub [u8; RAW_LEN]);
 
+/// A constant representing an empty XID (all zeros)
 pub const EMPTY_XID: Xid = Xid([0u8; RAW_LEN]);
 
+/// Conversion from our Xid to the original xid crate's Id type
+/// Only available when the "xid" feature is enabled
 #[cfg(feature = "xid")]
 impl From<Xid> for xid::Id {
     fn from(thread: Xid) -> Self {
@@ -23,6 +34,8 @@ impl From<Xid> for xid::Id {
     }
 }
 
+/// Conversion from the original xid crate's Id type to our Xid
+/// Only available when the "xid" feature is enabled
 #[cfg(feature = "xid")]
 impl From<xid::Id> for Xid {
     fn from(id: xid::Id) -> Self {
@@ -30,9 +43,21 @@ impl From<xid::Id> for Xid {
     }
 }
 
+/// Implements string parsing for Xid
+/// Allows creating an Xid from a base32 encoded string using `str.parse()`
 impl FromStr for Xid {
     type Err = String;
 
+    /// Parses a base32 encoded string into an Xid
+    ///
+    /// # Arguments
+    ///
+    /// * `s` - A base32 encoded string of exactly 20 characters
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Xid)` - If parsing was successful
+    /// * `Err(String)` - If the string has invalid length or contains invalid characters
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() != ENCODED_LEN {
             return Err(format!("Invalid length: {}", s.len()));
@@ -65,9 +90,20 @@ impl FromStr for Xid {
     }
 }
 
+/// Implements conversion from a byte slice to Xid
 impl TryFrom<&[u8]> for Xid {
     type Error = String;
 
+    /// Tries to create an Xid from a byte slice
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes` - A slice of bytes that should be exactly 12 bytes long
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Xid)` - If the slice has the correct length
+    /// * `Err(String)` - If the slice has an invalid length
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         if bytes.len() != RAW_LEN {
             return Err(format!("Invalid length: {}", bytes.len()));
@@ -79,9 +115,20 @@ impl TryFrom<&[u8]> for Xid {
     }
 }
 
+/// Implements conversion from a Vec<u8> to Xid
 impl TryFrom<Vec<u8>> for Xid {
     type Error = String;
 
+    /// Tries to create an Xid from a Vec<u8>
+    ///
+    /// # Arguments
+    ///
+    /// * `bytes` - A vector of bytes that should be exactly 12 bytes long
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Xid)` - If the vector has the correct length
+    /// * `Err(String)` - If the vector has an invalid length
     fn try_from(bytes: Vec<u8>) -> Result<Self, Self::Error> {
         let id: [u8; RAW_LEN] = bytes
             .try_into()
@@ -90,7 +137,18 @@ impl TryFrom<Vec<u8>> for Xid {
     }
 }
 
+/// Implements string formatting for Xid
+/// This converts the Xid to its base32 encoded string representation
 impl std::fmt::Display for Xid {
+    /// Formats the Xid as a base32 encoded string
+    ///
+    /// # Arguments
+    ///
+    /// * `f` - The formatter to write the string to
+    ///
+    /// # Returns
+    ///
+    /// * `std::fmt::Result` - The result of the formatting operation
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self(raw) = self;
         let mut bs = [0_u8; ENCODED_LEN];
@@ -118,12 +176,14 @@ impl std::fmt::Display for Xid {
     }
 }
 
+/// Implements AsRef trait for Xid to get a reference to the underlying byte array
 impl AsRef<[u8; RAW_LEN]> for Xid {
     fn as_ref(&self) -> &[u8; RAW_LEN] {
         &self.0
     }
 }
 
+/// Implements Deref trait for Xid to allow direct access to the underlying byte array
 impl Deref for Xid {
     type Target = [u8; RAW_LEN];
 
@@ -132,6 +192,7 @@ impl Deref for Xid {
     }
 }
 
+/// Implements Default trait for Xid, returning an empty Xid
 impl Default for Xid {
     fn default() -> Self {
         EMPTY_XID
@@ -139,26 +200,33 @@ impl Default for Xid {
 }
 
 impl Xid {
+    /// Creates a new Xid with a unique value
+    /// Only available when the "xid" feature is enabled
     #[cfg(feature = "xid")]
     pub fn new() -> Self {
         Self(xid::new().0)
     }
 
     /// Returns the xid of the thread.
+    /// Only available when the "xid" feature is enabled
     #[cfg(feature = "xid")]
     pub fn xid(&self) -> xid::Id {
         xid::Id(self.0)
     }
 
+    /// Returns a slice of the underlying byte array
     pub fn as_slice(&self) -> &[u8] {
         &self.0
     }
 
+    /// Checks if this Xid is empty (all zeros)
     pub fn is_empty(&self) -> bool {
         self == &EMPTY_XID
     }
 }
 
+/// Implements serialization for Xid
+/// Uses string representation for human-readable formats and raw bytes otherwise
 impl serde::Serialize for Xid {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
@@ -169,6 +237,8 @@ impl serde::Serialize for Xid {
     }
 }
 
+/// Implements deserialization for Xid
+/// Handles both string and byte array representations
 impl<'de> serde::Deserialize<'de> for Xid {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         use serde::de::Error;
@@ -184,11 +254,13 @@ impl<'de> serde::Deserialize<'de> for Xid {
     }
 }
 
+/// Module containing deserialization helpers for Xid
 mod deserialize {
     use super::{RAW_LEN, Xid};
     use serde::de::Error;
     use std::{convert::TryFrom, str::FromStr};
 
+    /// Visitor implementation for deserializing Xid from various formats
     pub(super) struct XidVisitor;
 
     impl<'de> serde::de::Visitor<'de> for XidVisitor {
@@ -198,6 +270,7 @@ mod deserialize {
             formatter.write_str("bytes or string")
         }
 
+        /// Deserializes an Xid from a string
         fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
         where
             E: serde::de::Error,
@@ -205,6 +278,7 @@ mod deserialize {
             Xid::from_str(v).map_err(E::custom)
         }
 
+        /// Deserializes an Xid from a byte array
         fn visit_bytes<E>(self, value: &[u8]) -> Result<Self::Value, E>
         where
             E: serde::de::Error,
@@ -212,6 +286,7 @@ mod deserialize {
             Xid::try_from(value).map_err(E::custom)
         }
 
+        /// Deserializes an Xid from a sequence of bytes
         fn visit_seq<V>(self, mut seq: V) -> Result<Self::Value, V::Error>
         where
             V: serde::de::SeqAccess<'de>,
@@ -229,6 +304,12 @@ mod deserialize {
     }
 }
 
+/// Generates a lookup table for decoding base32 characters
+///
+/// This function creates a 256-element array where each index represents
+/// an ASCII character code, and the value is the corresponding base32 value
+/// (0-31) for that character. Only the indices for '0'-'9' and 'a'-'v' have
+/// meaningful values; all other indices contain zeros.
 #[rustfmt::skip]
 const fn gen_dec() -> [u8; 256] {
     let mut dec = [0_u8; 256];
