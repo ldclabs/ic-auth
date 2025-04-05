@@ -3,8 +3,9 @@ use base64::{
     prelude::{BASE64_URL_SAFE, BASE64_URL_SAFE_NO_PAD},
 };
 use candid::CandidType;
+use core::fmt::{self, Debug};
+use core::ops::{Deref, DerefMut};
 use serde_bytes::{ByteArray, ByteBuf};
-use std::ops::{Deref, DerefMut};
 
 /// Wrapper around `Vec<u8>` to serialize and deserialize efficiently.
 /// If the serialization format is human readable (formats like JSON and YAML), it will be encoded in Base64URL.
@@ -33,8 +34,43 @@ use std::ops::{Deref, DerefMut};
 /// let parsed: Example = serde_json::from_str(&json).unwrap();
 /// assert_eq!(parsed.data.as_ref(), &[1, 2, 3, 4]);
 /// ```
-#[derive(CandidType, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(CandidType, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ByteBufB64(pub Vec<u8>);
+
+impl ByteBufB64 {
+    /// Construct a new, empty `ByteBufB64`.
+    pub fn new() -> Self {
+        ByteBufB64(Vec::new())
+    }
+
+    /// Construct a new, empty `ByteBufB64` with the specified capacity.
+    pub fn with_capacity(cap: usize) -> Self {
+        ByteBufB64(Vec::with_capacity(cap))
+    }
+
+    /// Wrap existing bytes in a `ByteBufB64`.
+    pub fn from<T: Into<Vec<u8>>>(bytes: T) -> Self {
+        ByteBufB64(bytes.into())
+    }
+
+    /// Unwrap the vector of byte underlying this `ByteBufB64`.
+    pub fn into_vec(self) -> Vec<u8> {
+        self.0
+    }
+
+    // This would hit "cannot move out of borrowed content" if invoked through
+    // the Deref impl; make it just work.
+    #[doc(hidden)]
+    pub fn into_boxed_slice(self) -> Box<[u8]> {
+        self.0.into_boxed_slice()
+    }
+
+    #[doc(hidden)]
+    #[allow(clippy::should_implement_trait)]
+    pub fn into_iter(self) -> <Vec<u8> as IntoIterator>::IntoIter {
+        self.0.into_iter()
+    }
+}
 
 /// Wrapper around `[u8; N]` to serialize and deserialize efficiently.
 /// If the serialization format is human readable (formats like JSON and YAML), it will be encoded in Base64URL.
@@ -63,8 +99,54 @@ pub struct ByteBufB64(pub Vec<u8>);
 /// let parsed: Example = serde_json::from_str(&json).unwrap();
 /// assert_eq!(parsed.data.as_ref(), &[1, 2, 3, 4]);
 /// ```
-#[derive(CandidType, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(CandidType, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ByteArrayB64<const N: usize>(pub [u8; N]);
+
+impl<const N: usize> ByteArrayB64<N> {
+    /// Construct a new, empty `ByteArrayB64`.
+    pub fn new() -> Self {
+        ByteArrayB64::default()
+    }
+
+    /// Wrap existing bytes in a `ByteArrayB64`.
+    pub fn from<T: Into<[u8; N]>>(bytes: T) -> Self {
+        ByteArrayB64(bytes.into())
+    }
+
+    /// Unwrap the array of byte underlying this `ByteArrayB64`.
+    pub fn into_array(self) -> [u8; N] {
+        self.0
+    }
+
+    /// Unwrap the vector of byte underlying this `ByteArrayB64`.
+    pub fn into_vec(self) -> Vec<u8> {
+        self.0.into()
+    }
+
+    #[doc(hidden)]
+    #[allow(clippy::should_implement_trait)]
+    pub fn into_iter(self) -> <[u8; N] as IntoIterator>::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<const N: usize> Default for ByteArrayB64<N> {
+    fn default() -> Self {
+        ByteArrayB64([0; N])
+    }
+}
+
+impl Debug for ByteBufB64 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        Debug::fmt(&self.0, f)
+    }
+}
+
+impl<const N: usize> Debug for ByteArrayB64<N> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        Debug::fmt(&self.0, f)
+    }
+}
 
 /// Implements `AsRef<[u8]>` for `ByteBufB64` to allow borrowing the underlying byte slice.
 impl AsRef<[u8]> for ByteBufB64 {
