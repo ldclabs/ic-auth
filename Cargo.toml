@@ -3,7 +3,7 @@ members = ["rs/ic_auth_types", "rs/ic_auth_verifier"]
 resolver = "2"
 
 [workspace.package]
-version = "0.2.4"
+version = "0.2.5"
 edition = "2024"
 repository = "https://github.com/ldclabs/ic-auth"
 keywords = ["config", "cbor", "canister", "icp", "encryption"]

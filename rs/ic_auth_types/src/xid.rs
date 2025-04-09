@@ -19,7 +19,7 @@ const DEC: [u8; 256] = gen_dec();
 /// XID is a globally unique identifier similar to UUID, but uses a more compact
 /// representation (12 bytes vs 16 bytes) and is lexicographically sortable.
 /// It's represented as a 20-character base32 string when serialized to text.
-#[derive(CandidType, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(CandidType, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Xid(pub [u8; RAW_LEN]);
 
 /// A constant representing an empty XID (all zeros)
@@ -69,7 +69,8 @@ impl FromStr for Xid {
 
         let bs = s.as_bytes();
         let mut raw = [0_u8; RAW_LEN];
-        raw[11] = (DEC[bs[17] as usize] << 6) | (DEC[bs[18] as usize] << 1) | (DEC[bs[19] as usize] >> 4);
+        raw[11] =
+            (DEC[bs[17] as usize] << 6) | (DEC[bs[18] as usize] << 1) | (DEC[bs[19] as usize] >> 4);
         // check the last byte
         if ENC[((raw[11] << 4) & 31) as usize] != bs[19] {
             return Err(format!("Invalid character: {}", bs[19] as char));
@@ -77,14 +78,18 @@ impl FromStr for Xid {
 
         raw[10] = (DEC[bs[16] as usize] << 3) | (DEC[bs[17] as usize] >> 2);
         raw[9] = (DEC[bs[14] as usize] << 5) | DEC[bs[15] as usize];
-        raw[8] = (DEC[bs[12] as usize] << 7) | (DEC[bs[13] as usize] << 2) | (DEC[bs[14] as usize] >> 3);
+        raw[8] =
+            (DEC[bs[12] as usize] << 7) | (DEC[bs[13] as usize] << 2) | (DEC[bs[14] as usize] >> 3);
         raw[7] = (DEC[bs[11] as usize] << 4) | (DEC[bs[12] as usize] >> 1);
-        raw[6] = (DEC[bs[9] as usize] << 6) | (DEC[bs[10] as usize] << 1) | (DEC[bs[11] as usize] >> 4);
+        raw[6] =
+            (DEC[bs[9] as usize] << 6) | (DEC[bs[10] as usize] << 1) | (DEC[bs[11] as usize] >> 4);
         raw[5] = (DEC[bs[8] as usize] << 3) | (DEC[bs[9] as usize] >> 2);
         raw[4] = (DEC[bs[6] as usize] << 5) | DEC[bs[7] as usize];
-        raw[3] = (DEC[bs[4] as usize] << 7) | (DEC[bs[5] as usize] << 2) | (DEC[bs[6] as usize] >> 3);
+        raw[3] =
+            (DEC[bs[4] as usize] << 7) | (DEC[bs[5] as usize] << 2) | (DEC[bs[6] as usize] >> 3);
         raw[2] = (DEC[bs[3] as usize] << 4) | (DEC[bs[4] as usize] >> 1);
-        raw[1] = (DEC[bs[1] as usize] << 6) | (DEC[bs[2] as usize] << 1) | (DEC[bs[3] as usize] >> 4);
+        raw[1] =
+            (DEC[bs[1] as usize] << 6) | (DEC[bs[2] as usize] << 1) | (DEC[bs[3] as usize] >> 4);
         raw[0] = (DEC[bs[0] as usize] << 3) | (DEC[bs[1] as usize] >> 2);
         Ok(Self(raw))
     }
