@@ -2,7 +2,11 @@
 // We canot use it in wasm32-unknown-unknown, so we need to copy the code here.
 
 use candid::CandidType;
-use std::{ops::Deref, str::FromStr};
+use core::{
+    fmt::{self, Debug, Display},
+    ops::Deref,
+    str::FromStr,
+};
 
 /// Length of the raw XID byte array
 pub const RAW_LEN: usize = 12;
@@ -19,7 +23,7 @@ const DEC: [u8; 256] = gen_dec();
 /// XID is a globally unique identifier similar to UUID, but uses a more compact
 /// representation (12 bytes vs 16 bytes) and is lexicographically sortable.
 /// It's represented as a 20-character base32 string when serialized to text.
-#[derive(CandidType, Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(CandidType, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Xid(pub [u8; RAW_LEN]);
 
 /// A constant representing an empty XID (all zeros)
@@ -144,7 +148,7 @@ impl TryFrom<Vec<u8>> for Xid {
 
 /// Implements string formatting for Xid
 /// This converts the Xid to its base32 encoded string representation
-impl std::fmt::Display for Xid {
+impl Display for Xid {
     /// Formats the Xid as a base32 encoded string
     ///
     /// # Arguments
@@ -154,7 +158,7 @@ impl std::fmt::Display for Xid {
     /// # Returns
     ///
     /// * `std::fmt::Result` - The result of the formatting operation
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self(raw) = self;
         let mut bs = [0_u8; ENCODED_LEN];
         bs[19] = ENC[((raw[11] << 4) & 31) as usize];
@@ -178,6 +182,12 @@ impl std::fmt::Display for Xid {
         bs[1] = ENC[(((raw[1] >> 6) | (raw[0] << 2)) & 31) as usize];
         bs[0] = ENC[(raw[0] >> 3) as usize];
         write!(f, "{}", std::str::from_utf8(&bs).expect("valid utf8"))
+    }
+}
+
+impl Debug for Xid {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Xid({})", self)
     }
 }
 
@@ -347,13 +357,12 @@ mod tests {
     // https://github.com/rs/xid/blob/efa678f304ab65d6d57eedcb086798381ae22206/id_test.go#L101
     #[test]
     fn test_to_string() {
-        assert_eq!(
-            Xid([
-                0x4d, 0x88, 0xe1, 0x5b, 0x60, 0xf4, 0x86, 0xe4, 0x28, 0x41, 0x2d, 0xc9
-            ])
-            .to_string(),
-            "9m4e2mr0ui3e8a215n4g"
-        );
+        let xid = Xid([
+            0x4d, 0x88, 0xe1, 0x5b, 0x60, 0xf4, 0x86, 0xe4, 0x28, 0x41, 0x2d, 0xc9,
+        ]);
+        assert_eq!(xid.to_string(), "9m4e2mr0ui3e8a215n4g");
+
+        assert_eq!(format!("{:?}", xid), "Xid(9m4e2mr0ui3e8a215n4g)");
     }
 
     #[test]

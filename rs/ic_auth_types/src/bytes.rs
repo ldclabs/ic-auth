@@ -3,7 +3,7 @@ use base64::{
     prelude::{BASE64_URL_SAFE, BASE64_URL_SAFE_NO_PAD},
 };
 use candid::CandidType;
-use core::fmt::{self, Debug};
+use core::fmt::{self, Debug, Display};
 use core::ops::{Deref, DerefMut};
 use serde_bytes::{ByteArray, ByteBuf};
 
@@ -136,15 +136,27 @@ impl<const N: usize> Default for ByteArrayB64<N> {
     }
 }
 
+impl Display for ByteBufB64 {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", BASE64_URL_SAFE.encode(&self.0))
+    }
+}
+
 impl Debug for ByteBufB64 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        Debug::fmt(&self.0, f)
+        write!(f, "ByteBufB64({})", self)
+    }
+}
+
+impl<const N: usize> Display for ByteArrayB64<N> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", BASE64_URL_SAFE.encode(&self.0))
     }
 }
 
 impl<const N: usize> Debug for ByteArrayB64<N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        Debug::fmt(&self.0, f)
+        write!(f, "ByteArrayB64<{}>({})", N, self)
     }
 }
 
@@ -417,6 +429,13 @@ mod tests {
             a: [1, 2, 3, 4].to_vec().into(),
             b: [1, 2, 3, 4].into(),
         };
+
+        println!("{:?}", t);
+        // Test { a: ByteBufB64(AQIDBA==), b: ByteArrayB64<4>(AQIDBA==) }
+        assert_eq!(format!("{}", t.a), "AQIDBA==");
+        assert_eq!(format!("{}", t.b), "AQIDBA==");
+        assert_eq!(format!("{:?}", t.a), "ByteBufB64(AQIDBA==)");
+        assert_eq!(format!("{:?}", t.b), "ByteArrayB64<4>(AQIDBA==)");
 
         let data = serde_json::to_string(&t).unwrap();
         println!("{}", data);
