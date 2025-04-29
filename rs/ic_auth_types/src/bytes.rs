@@ -3,8 +3,10 @@ use base64::{
     prelude::{BASE64_URL_SAFE, BASE64_URL_SAFE_NO_PAD},
 };
 use candid::CandidType;
-use core::fmt::{self, Debug, Display};
-use core::ops::{Deref, DerefMut};
+use core::{
+    fmt::{self, Debug, Display},
+    ops::{Deref, DerefMut},
+};
 use serde_bytes::{ByteArray, ByteBuf};
 
 /// Wrapper around `Vec<u8>` to serialize and deserialize efficiently.
