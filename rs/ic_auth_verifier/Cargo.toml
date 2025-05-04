@@ -10,7 +10,7 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-ic_auth_types = { path = "../ic_auth_types", version = "0.2" }
+ic_auth_types = { path = "../ic_auth_types", version = "0.3" }
 candid = { workspace = true }
 ciborium = { workspace = true }
 serde = { workspace = true }
@@ -34,7 +34,7 @@ rand = { workspace = true }
 
 [features]
 # should not include envelope feature for canister
-default = []
+default = ["full"]
 full = ["envelope"]
 envelope = [
   "dep:http",

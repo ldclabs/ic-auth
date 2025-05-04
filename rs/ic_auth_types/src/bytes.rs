@@ -152,7 +152,7 @@ impl Debug for ByteBufB64 {
 
 impl<const N: usize> Display for ByteArrayB64<N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", BASE64_URL_SAFE.encode(&self.0))
+        write!(f, "{}", BASE64_URL_SAFE.encode(self.0))
     }
 }
 
