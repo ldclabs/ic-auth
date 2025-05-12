@@ -10,7 +10,7 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-ic_auth_types = { path = "../ic_auth_types", version = "0.3" }
+ic_auth_types = { path = "../ic_auth_types", version = "0.4" }
 candid = { workspace = true }
 ciborium = { workspace = true }
 serde = { workspace = true }
@@ -33,12 +33,8 @@ ed25519-consensus = { workspace = true }
 rand = { workspace = true }
 
 [features]
-# should not include envelope feature for canister
 default = []
-full = ["envelope"]
-envelope = [
-  "dep:http",
-  "dep:base64",
-  "dep:ic-agent",
-  "dep:ic-signature-verification",
-]
+full = ["sign"]
+envelope = ["dep:http", "dep:base64", "dep:ic-signature-verification"]
+# should not include `sign` feature for canister
+sign = ["envelope", "dep:ic-agent"]

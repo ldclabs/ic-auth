@@ -14,11 +14,14 @@ pub use xid::*;
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct Delegation {
     /// The delegated-to key.
+    #[serde(alias = "p")]
     pub pubkey: ByteBufB64,
     /// A nanosecond timestamp after which this delegation is no longer valid.
+    #[serde(alias = "e")]
     pub expiration: u64,
     /// If present, this delegation only applies to requests sent to one of these canisters.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "t")]
     pub targets: Option<Vec<Principal>>,
 }
 
@@ -26,8 +29,10 @@ pub struct Delegation {
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct SignedDelegation {
     /// The signed delegation.
+    #[serde(alias = "d")]
     pub delegation: Delegation,
     /// The signature for the delegation.
+    #[serde(alias = "s")]
     pub signature: ByteBufB64,
 }
 
@@ -40,6 +45,67 @@ pub struct SignInResponse {
     pub user_key: ByteBufB64,
     /// seed is a part of the user_key
     pub seed: ByteBufB64,
+}
+
+/// DelegationCompact is a compact representation of a [`Delegation`].
+/// It is used to reduce the size of the delegation when it is serialized.
+#[derive(CandidType, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub struct DelegationCompact {
+    #[serde(rename = "p", alias = "pubkey")]
+    pub pubkey: ByteBufB64,
+    #[serde(rename = "e", alias = "expiration")]
+    pub expiration: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "t", alias = "targets")]
+    pub targets: Option<Vec<Principal>>,
+}
+
+/// SignedDelegationCompact is a compact representation of a [`SignedDelegation`].
+/// It is used to reduce the size of the delegation when it is serialized.
+#[derive(CandidType, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub struct SignedDelegationCompact {
+    #[serde(rename = "d", alias = "delegation")]
+    pub delegation: DelegationCompact,
+    #[serde(rename = "s", alias = "signature")]
+    pub signature: ByteBufB64,
+}
+
+impl From<DelegationCompact> for Delegation {
+    fn from(d: DelegationCompact) -> Self {
+        Self {
+            pubkey: d.pubkey,
+            expiration: d.expiration,
+            targets: d.targets,
+        }
+    }
+}
+
+impl From<Delegation> for DelegationCompact {
+    fn from(d: Delegation) -> Self {
+        Self {
+            pubkey: d.pubkey,
+            expiration: d.expiration,
+            targets: d.targets,
+        }
+    }
+}
+
+impl From<SignedDelegationCompact> for SignedDelegation {
+    fn from(d: SignedDelegationCompact) -> Self {
+        Self {
+            delegation: d.delegation.into(),
+            signature: d.signature,
+        }
+    }
+}
+
+impl From<SignedDelegation> for SignedDelegationCompact {
+    fn from(d: SignedDelegation) -> Self {
+        Self {
+            delegation: d.delegation.into(),
+            signature: d.signature,
+        }
+    }
 }
 
 #[cfg(test)]

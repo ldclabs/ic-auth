@@ -22,13 +22,13 @@
 Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
-ic_auth_types = "0.3"
+ic_auth_types = "0.4"
 ```
 
 Enables interoperability with the original `xid` crate:
 ```toml
 [dependencies]
-ic_auth_types = { version = "0.3", features = ["xid"] }
+ic_auth_types = { version = "0.4", features = ["xid"] }
 ```
 
 ## Related Crates

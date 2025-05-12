@@ -5,11 +5,13 @@ use base64::{
 use candid::{CandidType, Principal};
 use ciborium::{from_reader, into_writer};
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName};
-use ic_agent::Identity;
-use ic_auth_types::{ByteBufB64, Delegation, SignedDelegation};
+use ic_auth_types::{ByteBufB64, DelegationCompact, SignedDelegation, SignedDelegationCompact};
 use ic_canister_sig_creation::delegation_signature_msg;
 use serde::{Deserialize, Serialize};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[cfg(feature = "sign")]
+use ic_agent::Identity;
 
 use crate::{Algorithm, sha3_256, user_public_key_from_der, verify_basic_sig};
 
@@ -117,15 +119,18 @@ pub struct SignedEnvelope {
     /// The public key of the self-authenticating principal this request is from.
     /// This is the head of the delegation chain (if any) and is used to derive
     /// the principal ID of the sender.
+    #[serde(rename = "p", alias = "pubkey")]
     pub pubkey: ByteBufB64,
 
     /// A cryptographic signature authorizing the request.
     /// When delegations are involved, this is the signature from the tail of the
     /// delegation chain, not necessarily made by the owner of `pubkey`.
+    #[serde(rename = "s", alias = "signature")]
     pub signature: ByteBufB64,
 
     /// The request content's hash digest that was signed by the sender.
     /// This is typically a SHA-256 or SHA3-256 hash of the request content.
+    #[serde(rename = "h", alias = "digest")]
     pub digest: ByteBufB64,
 
     /// The chain of delegations connecting `pubkey` to `signature`, in order.
@@ -133,7 +138,8 @@ pub struct SignedEnvelope {
     /// of the previous entity, forming a chain of trust from the original identity
     /// to the actual signer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delegation: Option<Vec<SignedDelegation>>,
+    #[serde(rename = "d", alias = "delegation")]
+    pub delegation: Option<Vec<SignedDelegationCompact>>,
 }
 
 impl SignedEnvelope {
@@ -198,6 +204,7 @@ impl SignedEnvelope {
     ///
     /// # Returns
     /// * `Result<Self, String>` - The signed envelope or an error message
+    #[cfg(feature = "sign")]
     pub fn sign_message(identity: impl Identity, message: &[u8]) -> Result<Self, String> {
         Self::sign_digest(identity, sha3_256(message).into())
     }
@@ -210,6 +217,7 @@ impl SignedEnvelope {
     ///
     /// # Returns
     /// * `Result<Self, String>` - The signed envelope or an error message
+    #[cfg(feature = "sign")]
     pub fn sign_digest(identity: impl Identity, digest: Vec<u8>) -> Result<Self, String> {
         let sig = identity
             .sign_arbitrary(&digest)
@@ -227,8 +235,8 @@ impl SignedEnvelope {
             delegation: sig.delegations.map(|delegations| {
                 delegations
                     .into_iter()
-                    .map(|d| SignedDelegation {
-                        delegation: Delegation {
+                    .map(|d| SignedDelegationCompact {
+                        delegation: DelegationCompact {
                             pubkey: d.delegation.pubkey.into(),
                             expiration: d.delegation.expiration,
                             targets: d.delegation.targets,
@@ -532,6 +540,50 @@ pub fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
     URL_SAFE_NO_PAD
         .decode(data.trim().trim_end_matches('='))
         .map_err(|err| format!("failed to decode base64 data: {err}"))
+}
+
+/// SignedEnvelopeFull is a full representation of the SignedEnvelope.
+/// It includes the full field names for serialization and deserialization.
+#[derive(Clone, Debug, CandidType, Deserialize, Serialize)]
+pub struct SignedEnvelopeFull {
+    #[serde(alias = "p")]
+    pub pubkey: ByteBufB64,
+
+    #[serde(alias = "s")]
+    pub signature: ByteBufB64,
+
+    #[serde(alias = "h")]
+    pub digest: ByteBufB64,
+
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "d")]
+    pub delegation: Option<Vec<SignedDelegation>>,
+}
+
+impl From<SignedEnvelope> for SignedEnvelopeFull {
+    fn from(envelope: SignedEnvelope) -> Self {
+        Self {
+            pubkey: envelope.pubkey,
+            signature: envelope.signature,
+            digest: envelope.digest,
+            delegation: envelope
+                .delegation
+                .map(|delegations| delegations.into_iter().map(Into::into).collect()),
+        }
+    }
+}
+
+impl From<SignedEnvelopeFull> for SignedEnvelope {
+    fn from(envelope: SignedEnvelopeFull) -> Self {
+        Self {
+            pubkey: envelope.pubkey,
+            signature: envelope.signature,
+            digest: envelope.digest,
+            delegation: envelope
+                .delegation
+                .map(|delegations| delegations.into_iter().map(Into::into).collect()),
+        }
+    }
 }
 
 /// Returns the current Unix timestamp in milliseconds.

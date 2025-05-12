@@ -23,4 +23,5 @@ serde_json = { workspace = true }
 
 [features]
 default = []
+full = ["xid"]
 xid = ["dep:xid"]

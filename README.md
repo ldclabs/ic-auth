@@ -36,14 +36,14 @@ A Rust library providing essential data structures and utilities for working wit
 
 ```toml
 [dependencies]
-ic_auth_types = "0.3"  # Replace with the latest version
+ic_auth_types = "0.4"  # Replace with the latest version
 ```
 
 With XID compatibility:
 
 ```toml
 [dependencies]
-ic_auth_types = { version = "0.3", features = ["xid"] }
+ic_auth_types = { version = "0.4", features = ["full"] }
 ```
 
 ### `ic_auth_verifier`
@@ -61,14 +61,14 @@ A Rust library for signing and verifying cryptographic signatures in the IC-Auth
 
 ```toml
 [dependencies]
-ic_auth_verifier = "0.3"  # Replace with the latest version
+ic_auth_verifier = "0.4"  # Replace with the latest version
 ```
 
 With envelope support:
 
 ```toml
 [dependencies]
-ic_auth_verifier = { version = "0.3", features = ["envelope"] }
+ic_auth_verifier = { version = "0.4", features = ["full"] }
 ```
 
 ## Usage Examples
