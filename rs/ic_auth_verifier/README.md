@@ -52,7 +52,7 @@ use ic_auth_verifier::SignedEnvelope;
 let identity = /* your ICP Identity */;
 
 let message = b"message";
-let envelope = SignedEnvelope::sign_message(identity, message)?;
+let envelope = SignedEnvelope::sign_message(&identity, message)?;
 // Adds the SignedEnvelope to the Authorization header to be sent to the service which will verify the signature.
 envelope.to_authorization(&mut headers)?;
 // Or adds the SignedEnvelope components to the IC-Auth-* HTTP headers.

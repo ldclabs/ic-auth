@@ -205,7 +205,7 @@ impl SignedEnvelope {
     /// # Returns
     /// * `Result<Self, String>` - The signed envelope or an error message
     #[cfg(feature = "sign")]
-    pub fn sign_message(identity: impl Identity, message: &[u8]) -> Result<Self, String> {
+    pub fn sign_message(identity: &impl Identity, message: &[u8]) -> Result<Self, String> {
         Self::sign_digest(identity, sha3_256(message).into())
     }
 
@@ -218,7 +218,7 @@ impl SignedEnvelope {
     /// # Returns
     /// * `Result<Self, String>` - The signed envelope or an error message
     #[cfg(feature = "sign")]
-    pub fn sign_digest(identity: impl Identity, digest: Vec<u8>) -> Result<Self, String> {
+    pub fn sign_digest(identity: &impl Identity, digest: Vec<u8>) -> Result<Self, String> {
         let sig = identity
             .sign_arbitrary(&digest)
             .map_err(|err| format!("{:?}", err))?;
@@ -618,7 +618,7 @@ mod tests {
 
         let msg = b"hello world";
         let mut headers = HeaderMap::new();
-        let se = SignedEnvelope::sign_message(id, msg).unwrap();
+        let se = SignedEnvelope::sign_message(&id, msg).unwrap();
         se.to_headers(&mut headers).unwrap();
 
         let mut se2 = SignedEnvelope::from_headers(&headers).unwrap();
