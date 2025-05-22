@@ -6,6 +6,7 @@ use candid::CandidType;
 use core::{
     fmt::{self, Debug, Display},
     ops::{Deref, DerefMut},
+    str::FromStr,
 };
 use serde_bytes::{ByteArray, ByteBuf};
 
@@ -250,6 +251,46 @@ impl<const N: usize> From<ByteArray<N>> for ByteArrayB64<N> {
     }
 }
 
+/// Implements `FromStr` for `ByteBufB64` to allow easy conversion from a Base64URL encoded string.
+impl FromStr for ByteBufB64 {
+    type Err = base64::DecodeError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let v = BASE64_URL_SAFE_NO_PAD.decode(s.trim_end_matches('='))?;
+        Ok(ByteBufB64(v))
+    }
+}
+
+/// Implements `From<&str>` for `ByteBufB64` to allow easy conversion from a Base64URL encoded string.
+impl TryFrom<&str> for ByteBufB64 {
+    type Error = base64::DecodeError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        ByteBufB64::from_str(s)
+    }
+}
+
+/// Implements `FromStr` for `ByteArrayB64<N>` to allow easy conversion from a Base64URL encoded string.
+impl<const N: usize> FromStr for ByteArrayB64<N> {
+    type Err = base64::DecodeError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let v = BASE64_URL_SAFE_NO_PAD.decode(s.trim_end_matches('='))?;
+        let l = v.len();
+        let v: [u8; N] = v
+            .try_into()
+            .map_err(|_| base64::DecodeError::InvalidLength(l))?;
+        Ok(ByteArrayB64(v))
+    }
+}
+
+/// Implements `From<&str>` for `ByteArrayB64<N>` to allow easy conversion from a Base64URL encoded string.
+impl<const N: usize> TryFrom<&str> for ByteArrayB64<N> {
+    type Error = base64::DecodeError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        ByteArrayB64::from_str(s)
+    }
+}
+
 /// Implements `serde::Serialize` for `ByteBufB64`.
 /// Uses Base64URL encoding for human-readable formats and raw bytes for binary formats.
 impl serde::Serialize for ByteBufB64 {
@@ -310,7 +351,8 @@ impl<'de, const N: usize> serde::Deserialize<'de> for ByteArrayB64<N> {
 
 /// Module containing visitor implementations for deserialization.
 mod deserialize {
-    use super::{BASE64_URL_SAFE_NO_PAD, ByteArrayB64, ByteBufB64, Engine};
+    use super::{ByteArrayB64, ByteBufB64};
+    use core::str::FromStr;
     use serde::de::Error;
 
     /// Visitor for deserializing `ByteBufB64` from various formats.
@@ -328,11 +370,7 @@ mod deserialize {
         where
             E: serde::de::Error,
         {
-            let s = v.trim_end_matches('=');
-            BASE64_URL_SAFE_NO_PAD
-                .decode(s)
-                .map(ByteBufB64)
-                .map_err(E::custom)
+            ByteBufB64::from_str(v).map_err(E::custom)
         }
 
         /// Deserializes a byte slice into a `ByteBufB64`.
@@ -382,9 +420,7 @@ mod deserialize {
         where
             E: serde::de::Error,
         {
-            let s = v.trim_end_matches('=');
-            let v = BASE64_URL_SAFE_NO_PAD.decode(s).map_err(E::custom)?;
-            self.visit_bytes(&v)
+            ByteArrayB64::from_str(v).map_err(E::custom)
         }
 
         /// Deserializes a byte slice into a `ByteArrayB64<N>`.
@@ -443,6 +479,8 @@ mod tests {
         println!("{}", data);
         assert_eq!(data, r#"{"a":"AQIDBA==","b":"AQIDBA=="}"#);
         let t1: Test = serde_json::from_str(&data).unwrap();
+        assert_eq!(t, t1);
+        let t1: Test = serde_json::from_str(r#"{"a":"AQIDBA=","b":"AQIDBA"}"#).unwrap();
         assert_eq!(t, t1);
 
         let mut data = Vec::new();
