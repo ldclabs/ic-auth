@@ -24,10 +24,10 @@ ic-canister-sig-creation = { workspace = true }
 ic-signature-verification = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
+const-hex = { workspace = true }
 ic-agent = { workspace = true, optional = true }
 
 [dev-dependencies]
-const-hex = { workspace = true }
 ic-agent = { workspace = true }
 ed25519-consensus = { workspace = true }
 rand = { workspace = true }

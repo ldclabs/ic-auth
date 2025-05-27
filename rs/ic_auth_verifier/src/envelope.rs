@@ -278,8 +278,6 @@ impl SignedEnvelope {
             }
         }
 
-        let mut has_targets = false;
-        let mut in_targets = false;
         let mut last_verified = &self.pubkey;
         if let Some(delegation) = &self.delegation {
             if delegation.is_empty() {
@@ -305,13 +303,15 @@ impl SignedEnvelope {
 
                 let targets = match &d.delegation.targets {
                     Some(targets) => {
-                        has_targets = true;
-                        in_targets = in_targets
-                            || if let Some(target) = &expect_target {
-                                targets.contains(target)
-                            } else {
-                                false
-                            };
+                        if let Some(target) = &expect_target {
+                            // Should check if the expected target is in the delegation targets
+                            if !targets.contains(target) {
+                                return Err(format!(
+                                    "Expected target canister ID '{expect_target:?}' is not in the delegation targets: {:?}",
+                                    targets
+                                ));
+                            }
+                        }
                         Some(
                             targets
                                 .iter()
@@ -331,12 +331,6 @@ impl SignedEnvelope {
 
                 last_verified = &d.delegation.pubkey;
             }
-        }
-
-        if has_targets && !in_targets {
-            return Err(format!(
-                "Canister '{expect_target:?}' is not one of the delegation targets.",
-            ));
         }
 
         verify_sig(last_verified, &self.digest, &self.signature)
@@ -468,6 +462,74 @@ impl SignedEnvelope {
         }
         Ok(())
     }
+}
+
+/// Verifies a delegation chain.
+///
+/// This function checks the validity of a chain of signed delegations,
+/// ensuring that each delegation is not expired, and that the signatures
+/// are valid according to the provided IC root public key.
+///
+/// # Arguments
+/// * `user_pubkey` - The der public key of the user to sign the delegation chain
+/// * `session_pubkey` - The public key of the session to verify against
+/// * `delegations` - The chain of signed delegations to verify
+/// * `now_ms` - The current time in milliseconds since the Unix epoch
+/// * `ic_root_public_key_raw` - Optional raw IC root public key for signature verification
+pub fn verify_delegation_chain(
+    user_pubkey: &[u8],
+    session_pubkey: &[u8],
+    delegations: &[SignedDelegationCompact],
+    now_ms: u64,
+    ic_root_public_key_raw: Option<&[u8]>,
+) -> Result<(), String> {
+    if delegations.is_empty() {
+        return Err("Delegation chain is empty".to_string());
+    }
+
+    let ic_root_public_key_raw = ic_root_public_key_raw.unwrap_or(IC_ROOT_PUBLIC_KEY_RAW);
+    let mut last_verified = user_pubkey;
+    for d in delegations {
+        if d.delegation.expiration / 1_000_000 < now_ms - PERMITTED_DRIFT_MS {
+            return Err(format!(
+                "Delegation has expired:\n\
+                         Provided expiry:    {}\n\
+                         Local replica timestamp: {}",
+                d.delegation.expiration,
+                now_ms * 1_000_000,
+            ));
+        }
+
+        let msg = delegation_signature_msg(
+            d.delegation.pubkey.as_slice(),
+            d.delegation.expiration,
+            d.delegation
+                .targets
+                .as_ref()
+                .map(|targets| {
+                    targets
+                        .iter()
+                        .map(|p| p.as_slice().to_vec())
+                        .collect::<Vec<Vec<u8>>>()
+                })
+                .as_ref(),
+        );
+
+        verify_sig_with_rootkey(ic_root_public_key_raw, last_verified, &msg, &d.signature)?;
+
+        last_verified = &d.delegation.pubkey;
+    }
+    if last_verified != session_pubkey {
+        return Err(format!(
+            "Last verified public key does not match session public key:\n\
+             Last verified: {}\n\
+             Session public key: {}",
+            const_hex::encode(last_verified),
+            const_hex::encode(session_pubkey)
+        ));
+    }
+
+    Ok(())
 }
 
 /// Extracts base64url-encoded data from an HTTP header.
