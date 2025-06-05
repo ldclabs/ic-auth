@@ -1,9 +1,10 @@
-/// Lite version of `ic-crypto-standalone-sig-verifier`
-/// Original source: https://github.com/dfinity/ic/blob/master/rs/crypto/standalone-sig-verifier
 mod asn1;
 
 #[cfg(feature = "envelope")]
 pub mod envelope;
+
+#[cfg(feature = "envelope")]
+pub mod deeplink;
 
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use sha3::Digest;

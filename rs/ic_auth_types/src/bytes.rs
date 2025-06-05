@@ -8,7 +8,8 @@ use core::{
     ops::{Deref, DerefMut},
     str::FromStr,
 };
-use serde_bytes::{ByteArray, ByteBuf};
+
+pub use serde_bytes::{self, ByteArray, ByteBuf, Bytes};
 
 /// Wrapper around `Vec<u8>` to serialize and deserialize efficiently.
 /// If the serialization format is human readable (formats like JSON and YAML), it will be encoded in Base64URL.
@@ -453,6 +454,7 @@ mod deserialize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use candid::encode_one;
     use serde::{Deserialize, Serialize};
 
     #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -492,5 +494,11 @@ mod tests {
         );
         let t1: Test = ciborium::from_reader(&data[..]).unwrap();
         assert_eq!(t, t1);
+
+        let a = encode_one(vec![1u8, 2, 3, 4]).unwrap();
+        println!("candid: {}", const_hex::encode(&a));
+        assert_eq!(a, encode_one(ByteBuf::from(vec![1, 2, 3, 4])).unwrap());
+        assert_eq!(a, encode_one(ByteBufB64::from(vec![1, 2, 3, 4])).unwrap());
+        assert_eq!(a, encode_one(ByteArrayB64::from([1, 2, 3, 4])).unwrap());
     }
 }
