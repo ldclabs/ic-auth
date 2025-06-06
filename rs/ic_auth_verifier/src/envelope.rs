@@ -8,9 +8,8 @@ use http::header::{AUTHORIZATION, HeaderMap, HeaderName};
 use ic_auth_types::{ByteBufB64, DelegationCompact, SignedDelegation, SignedDelegationCompact};
 use ic_canister_sig_creation::delegation_signature_msg;
 use serde::{Deserialize, Serialize};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(feature = "sign")]
+#[cfg(feature = "identity")]
 use ic_agent::Identity;
 
 use crate::{Algorithm, sha3_256, user_public_key_from_der, verify_basic_sig};
@@ -206,7 +205,7 @@ impl SignedEnvelope {
     ///
     /// # Returns
     /// * `Result<Self, String>` - The signed envelope or an error message
-    #[cfg(feature = "sign")]
+    #[cfg(feature = "identity")]
     pub fn sign_message(identity: &impl Identity, message: &[u8]) -> Result<Self, String> {
         Self::sign_digest(identity, sha3_256(message).into())
     }
@@ -219,7 +218,7 @@ impl SignedEnvelope {
     ///
     /// # Returns
     /// * `Result<Self, String>` - The signed envelope or an error message
-    #[cfg(feature = "sign")]
+    #[cfg(feature = "identity")]
     pub fn sign_digest(identity: &impl Identity, digest: Vec<u8>) -> Result<Self, String> {
         let sig = identity
             .sign_arbitrary(&digest)
@@ -663,27 +662,14 @@ impl From<SignedEnvelopeFull> for SignedEnvelope {
     }
 }
 
-/// Returns the current Unix timestamp in milliseconds.
-///
-/// # Returns
-/// * `u64` - The number of milliseconds since the Unix epoch
-///
-/// # Panics
-/// * If the system time is before the Unix epoch
-#[inline]
-pub fn unix_ms() -> u64 {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system time before Unix epoch");
-    ts.as_millis() as u64
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use ed25519_consensus::SigningKey;
     use ic_agent::{Identity, identity::BasicIdentity};
     use ic_canister_sig_creation::CanisterSigPublicKey;
+
+    use crate::unix_timestamp;
 
     #[test]
     fn test_envelope_with_ed25519() {
@@ -699,10 +685,16 @@ mod tests {
         se.to_headers(&mut headers).unwrap();
 
         let mut se2 = SignedEnvelope::from_headers(&headers).unwrap();
-        assert!(se2.verify(unix_ms(), None, None).is_ok());
+        assert!(
+            se2.verify(unix_timestamp().as_millis() as u64, None, None)
+                .is_ok()
+        );
 
         se2.digest = sha3_256(b"hello world 2").to_vec().into();
-        assert!(se2.verify(unix_ms(), None, None).is_err());
+        assert!(
+            se2.verify(unix_timestamp().as_millis() as u64, None, None)
+                .is_err()
+        );
     }
 
     #[test]

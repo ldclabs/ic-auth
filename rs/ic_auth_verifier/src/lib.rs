@@ -1,3 +1,6 @@
+use k256::ecdsa::signature::hazmat::PrehashVerifier;
+use sha3::Digest;
+
 mod asn1;
 
 #[cfg(feature = "envelope")]
@@ -6,11 +9,20 @@ pub mod envelope;
 #[cfg(feature = "envelope")]
 pub mod deeplink;
 
-use k256::ecdsa::signature::hazmat::PrehashVerifier;
-use sha3::Digest;
+#[cfg(feature = "identity")]
+pub mod identity;
 
 pub use asn1::*;
 pub use ic_canister_sig_creation::CanisterSigPublicKey;
+
+#[cfg(feature = "envelope")]
+pub use envelope::*;
+
+#[cfg(feature = "envelope")]
+pub use deeplink::*;
+
+#[cfg(feature = "identity")]
+pub use identity::*;
 
 pub fn verify_basic_sig(
     algorithm_id: Algorithm,
@@ -72,6 +84,16 @@ pub fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut hasher = sha3::Keccak256::new();
     hasher.update(data);
     hasher.finalize().into()
+}
+
+#[cfg(feature = "identity")]
+pub fn rand_bytes<const N: usize>() -> [u8; N] {
+    use rand::RngCore;
+
+    let mut rng = rand::rng();
+    let mut bytes = [0u8; N];
+    rng.fill_bytes(&mut bytes);
+    bytes
 }
 
 #[cfg(test)]

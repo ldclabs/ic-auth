@@ -19,6 +19,7 @@
 - Parse and validate DER-encoded public keys
 - Compute various hash functions (SHA-256, SHA3-256, Keccak-256)
 - Optional envelope functionality (enabled with the `envelope` feature)
+- A thread-safe wrapper around an Identity implementation that can be atomically updated (enabled with the `identity` feature)
 
 ## Installation
 
@@ -29,17 +30,17 @@ Add this to your `Cargo.toml`:
 ic_auth_verifier = "0.4"  # Replace with the latest version
 ```
 
-To enable the envelope feature:
+To enable the `envelope` feature:
 
 ```toml
 [dependencies]
 ic_auth_verifier = { version = "0.4", features = ["envelope"] }
 ```
 
-To enable the signing feature (It can not be compiled in canister):
+To enable the `identity` feature (It can not be compiled in canister):
 ```toml
 [dependencies]
-ic_auth_verifier = { version = "0.4", features = ["sign"] }
+ic_auth_verifier = { version = "0.4", features = ["identity"] }
 ```
 
 ## Usage
@@ -62,11 +63,11 @@ envelope.to_authorization(&mut headers)?;
 ### Basic Verification
 
 ```rust
-use ic_auth_verifier::{SignedEnvelope, unix_ms};
+use ic_auth_verifier::{SignedEnvelope, unix_timestamp};
 
 let envelope = SignedEnvelope::from_authorization(&headers).unwrap();
 // Verify the envelope
-envelope.verify(unix_ms(), None, None)?;
+envelope.verify(unix_timestamp().as_millis() as u64, None, None)?;
 ```
 
 ## License

@@ -21,12 +21,15 @@ p256 = { workspace = true }
 ed25519-dalek = { workspace = true }
 simple_asn1 = { workspace = true }
 ic-canister-sig-creation = { workspace = true }
+arc-swap = { workspace = true, optional = true }
 ic-signature-verification = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
 const-hex = { workspace = true }
 ic-agent = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
+ed25519-consensus = { workspace = true, optional = true }
+rand = { workspace = true, optional = true }
 
 [dev-dependencies]
 ic-agent = { workspace = true }
@@ -35,12 +38,18 @@ rand = { workspace = true }
 
 [features]
 default = []
-full = ["sign"]
+full = ["identity"]
 envelope = [
   "dep:http",
   "dep:base64",
   "dep:ic-signature-verification",
   "dep:url",
 ]
-# should not include `sign` feature for canister
-sign = ["envelope", "dep:ic-agent"]
+# should not include `identity` feature for canister
+identity = [
+  "envelope",
+  "dep:ic-agent",
+  "dep:arc-swap",
+  "dep:ed25519-consensus",
+  "dep:rand",
+]
