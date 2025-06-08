@@ -25,7 +25,7 @@ arc-swap = { workspace = true, optional = true }
 ic-signature-verification = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
-const-hex = { workspace = true }
+hex = { workspace = true }
 ic-agent = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 ed25519-consensus = { workspace = true, optional = true }

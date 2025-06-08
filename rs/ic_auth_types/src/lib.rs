@@ -131,13 +131,11 @@ mod tests {
 
         let mut data = Vec::new();
         ciborium::into_writer(&d, &mut data).unwrap();
-        println!("{}", const_hex::encode(&data));
+        println!("{}", hex::encode(&data));
         assert_eq!(
             data,
-            const_hex::decode(
-                "a3667075626b657944010203046a65787069726174696f6e186367746172676574738140"
-            )
-            .unwrap()
+            hex::decode("a3667075626b657944010203046a65787069726174696f6e186367746172676574738140")
+                .unwrap()
         );
         let d1: Delegation = ciborium::from_reader(&data[..]).unwrap();
         assert_eq!(d, d1);

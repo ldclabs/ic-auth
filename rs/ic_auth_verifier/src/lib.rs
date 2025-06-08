@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn should_work_with_ecdsa_secp256k1() {
-        let pk_der = const_hex::decode("3056301006072a8648ce3d020106052b8104000a034200047060f720298ffa0f48d9606abdb013bc82f4ff269f9adc3e7226391af3fad8b30fd6a30deb81d5b4f9e142971085d0ae15b8e222d85af1e17438e630d09b7ef4").unwrap();
+        let pk_der = hex::decode("3056301006072a8648ce3d020106052b8104000a034200047060f720298ffa0f48d9606abdb013bc82f4ff269f9adc3e7226391af3fad8b30fd6a30deb81d5b4f9e142971085d0ae15b8e222d85af1e17438e630d09b7ef4").unwrap();
         let (alg, pk) = user_public_key_from_der(&pk_der).unwrap();
         assert_eq!(alg, Algorithm::EcdsaSecp256k1);
         assert!(k256::ecdsa::VerifyingKey::from_sec1_bytes(&pk).is_ok());
@@ -146,7 +146,7 @@ mod tests {
 
     #[test]
     fn should_work_with_ecdsa_p256() {
-        let pk_der = const_hex::decode("3059301306072a8648ce3d020106082a8648ce3d03010703420004485c32997ce7c6d38ca82c821185c689d424fac7c9695bb97786c4248aab6428949bcd163e2bcf3eeeac4f200b38fbd053f82c4e1776dc9c6dc8db9b7c35e06f").unwrap();
+        let pk_der = hex::decode("3059301306072a8648ce3d020106082a8648ce3d03010703420004485c32997ce7c6d38ca82c821185c689d424fac7c9695bb97786c4248aab6428949bcd163e2bcf3eeeac4f200b38fbd053f82c4e1776dc9c6dc8db9b7c35e06f").unwrap();
         let (alg, pk) = user_public_key_from_der(&pk_der).unwrap();
         assert_eq!(alg, Algorithm::EcdsaP256);
         assert!(p256::ecdsa::VerifyingKey::from_sec1_bytes(&pk).is_ok());
@@ -164,8 +164,7 @@ mod tests {
     #[test]
     fn should_work_with_iccsa_pubkey() {
         let pk_der =
-            const_hex::decode("301b300c060a2b0601040183b8430102030b007075626c6963206b6579")
-                .unwrap();
+            hex::decode("301b300c060a2b0601040183b8430102030b007075626c6963206b6579").unwrap();
         let (alg, _pk) = user_public_key_from_der(&pk_der).unwrap();
         assert_eq!(alg, Algorithm::IcCanisterSignature);
     }

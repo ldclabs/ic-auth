@@ -382,10 +382,10 @@ mod tests {
 
         let mut data = Vec::new();
         ciborium::into_writer(&t, &mut data).unwrap();
-        println!("{}", const_hex::encode(&data));
+        println!("{}", hex::encode(&data));
         assert_eq!(
             data,
-            const_hex::decode("a2667468726561644c000000000000000000000000697072696e636970616c4104")
+            hex::decode("a2667468726561644c000000000000000000000000697072696e636970616c4104")
                 .unwrap()
         );
         let t1: Test = ciborium::from_reader(&data[..]).unwrap();

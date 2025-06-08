@@ -487,16 +487,13 @@ mod tests {
 
         let mut data = Vec::new();
         ciborium::into_writer(&t, &mut data).unwrap();
-        println!("{}", const_hex::encode(&data));
-        assert_eq!(
-            data,
-            const_hex::decode("a26161440102030461624401020304").unwrap()
-        );
+        println!("{}", hex::encode(&data));
+        assert_eq!(data, hex::decode("a26161440102030461624401020304").unwrap());
         let t1: Test = ciborium::from_reader(&data[..]).unwrap();
         assert_eq!(t, t1);
 
         let a = encode_one(vec![1u8, 2, 3, 4]).unwrap();
-        println!("candid: {}", const_hex::encode(&a));
+        println!("candid: {}", hex::encode(&a));
         assert_eq!(a, encode_one(ByteBuf::from(vec![1, 2, 3, 4])).unwrap());
         assert_eq!(a, encode_one(ByteBufB64::from(vec![1, 2, 3, 4])).unwrap());
         assert_eq!(a, encode_one(ByteArrayB64::from([1, 2, 3, 4])).unwrap());
