@@ -36,17 +36,17 @@ pub fn verify_basic_sig(
                 .try_into()
                 .map_err(|_| "Ed25519 public key must be 32 bytes long".to_string())?;
             let key = ed25519_dalek::VerifyingKey::from_bytes(public_key)
-                .map_err(|err| format!("{:?}", err))?;
+                .map_err(|err| format!("{err:?}"))?;
             let sig = ed25519_dalek::Signature::from_slice(signature)
-                .map_err(|err| format!("{:?}", err))?;
+                .map_err(|err| format!("{err:?}"))?;
             key.verify_strict(msg, &sig)
                 .map_err(|_| "Ed25519 signature verification failed".to_string())
         }
         Algorithm::EcdsaP256 => {
             let key = p256::ecdsa::VerifyingKey::from_sec1_bytes(public_key)
-                .map_err(|err| format!("{:?}", err))?;
+                .map_err(|err| format!("{err:?}"))?;
             let sig =
-                p256::ecdsa::Signature::try_from(signature).map_err(|err| format!("{:?}", err))?;
+                p256::ecdsa::Signature::try_from(signature).map_err(|err| format!("{err:?}"))?;
 
             let msg_hash = sha256(msg);
             key.verify_prehash(&msg_hash, &sig)
@@ -56,7 +56,7 @@ pub fn verify_basic_sig(
             let key = k256::ecdsa::VerifyingKey::from_sec1_bytes(public_key)
                 .map_err(|err| err.to_string())?;
             let sig =
-                k256::ecdsa::Signature::try_from(signature).map_err(|err| format!("{:?}", err))?;
+                k256::ecdsa::Signature::try_from(signature).map_err(|err| format!("{err:?}"))?;
 
             let msg_hash = sha256(msg);
             key.verify_prehash(&msg_hash, &sig)

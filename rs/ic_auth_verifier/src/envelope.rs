@@ -3,9 +3,12 @@ use base64::{
     engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
 use candid::{CandidType, Principal};
-use ciborium::{from_reader, into_writer};
+use ciborium::from_reader;
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName};
-use ic_auth_types::{ByteBufB64, DelegationCompact, SignedDelegation, SignedDelegationCompact};
+use ic_auth_types::{
+    ByteBufB64, DelegationCompact, SignedDelegation, SignedDelegationCompact,
+    canonical_cbor_into_vec,
+};
 use ic_canister_sig_creation::delegation_signature_msg;
 use serde::{Deserialize, Serialize};
 
@@ -160,9 +163,7 @@ impl SignedEnvelope {
     /// # Returns
     /// * `Vec<u8>` - The CBOR-encoded binary representation of the envelope
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut buf = vec![];
-        into_writer(self, &mut buf).expect("failed to encode SignedEnvelope");
-        buf
+        canonical_cbor_into_vec(&self).expect("failed to encode SignedEnvelope")
     }
 
     /// Decodes a SignedEnvelope from its binary representation.
@@ -459,7 +460,7 @@ impl SignedEnvelope {
             headers.insert(
                 &HEADER_IC_AUTH_DELEGATION,
                 URL_SAFE_NO_PAD
-                    .encode(to_cbor_bytes(&delegations))
+                    .encode(canonical_cbor_into_vec(&delegations)?)
                     .parse()
                     .map_err(|err| {
                         format!("insert {HEADER_IC_AUTH_DELEGATION} header failed: {err}")
@@ -585,22 +586,6 @@ pub fn extract_user(headers: &HeaderMap) -> Principal {
     } else {
         ANONYMOUS_PRINCIPAL
     }
-}
-
-/// Encodes an object into CBOR binary format.
-///
-/// # Arguments
-/// * `obj` - The object to encode, which must implement the Serialize trait
-///
-/// # Returns
-/// * `Vec<u8>` - The CBOR-encoded binary representation of the object
-///
-/// # Panics
-/// * If encoding fails
-pub fn to_cbor_bytes(obj: &impl Serialize) -> Vec<u8> {
-    let mut buf: Vec<u8> = Vec::new();
-    into_writer(obj, &mut buf).expect("failed to encode in CBOR format");
-    buf
 }
 
 /// Decodes base64url-encoded data.

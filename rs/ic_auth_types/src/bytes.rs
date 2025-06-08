@@ -148,7 +148,7 @@ impl Display for ByteBufB64 {
 
 impl Debug for ByteBufB64 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ByteBufB64({})", self)
+        write!(f, "ByteBufB64({self})")
     }
 }
 
@@ -160,7 +160,7 @@ impl<const N: usize> Display for ByteArrayB64<N> {
 
 impl<const N: usize> Debug for ByteArrayB64<N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ByteArrayB64<{}>({})", N, self)
+        write!(f, "ByteArrayB64<{N}>({self})")
     }
 }
 
@@ -470,7 +470,7 @@ mod tests {
             b: [1, 2, 3, 4].into(),
         };
 
-        println!("{:?}", t);
+        println!("{t:?}");
         // Test { a: ByteBufB64(AQIDBA==), b: ByteArrayB64<4>(AQIDBA==) }
         assert_eq!(format!("{}", t.a), "AQIDBA==");
         assert_eq!(format!("{}", t.b), "AQIDBA==");
@@ -478,7 +478,7 @@ mod tests {
         assert_eq!(format!("{:?}", t.b), "ByteArrayB64<4>(AQIDBA==)");
 
         let data = serde_json::to_string(&t).unwrap();
-        println!("{}", data);
+        println!("{data}");
         assert_eq!(data, r#"{"a":"AQIDBA==","b":"AQIDBA=="}"#);
         let t1: Test = serde_json::from_str(&data).unwrap();
         assert_eq!(t, t1);

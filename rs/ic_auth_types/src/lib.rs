@@ -2,11 +2,12 @@ use candid::{CandidType, Principal};
 use serde::{Deserialize, Serialize};
 
 mod bytes;
+mod cbor;
 mod xid;
 
 pub use bytes::*;
+pub use cbor::*;
 pub use xid::*;
-
 /// A delegation from one key to another.
 ///
 /// If key A signs a delegation containing key B, then key B may be used to
@@ -121,7 +122,7 @@ mod tests {
         };
 
         let data = serde_json::to_string(&d).unwrap();
-        println!("{}", data);
+        println!("{data}");
         assert_eq!(
             data,
             r#"{"pubkey":"AQIDBA==","expiration":99,"targets":["aaaaa-aa"]}"#

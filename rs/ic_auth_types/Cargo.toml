@@ -12,12 +12,12 @@ license.workspace = true
 [dependencies]
 base64 = { workspace = true }
 candid = { workspace = true }
+ciborium = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 xid = { workspace = true, optional = true }
 
 [dev-dependencies]
-ciborium = { workspace = true }
 hex = { workspace = true }
 serde_json = { workspace = true }
 

@@ -1,5 +1,5 @@
-use ciborium::{from_reader, into_writer};
-use ic_auth_types::{ByteBufB64, SignedDelegationCompact};
+use ciborium::from_reader;
+use ic_auth_types::{ByteBufB64, SignedDelegationCompact, canonical_cbor_into_vec};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::str::FromStr;
 
@@ -73,9 +73,9 @@ where
         }
 
         if let Some(payload) = &self.payload {
-            let mut data = ByteBufB64(Vec::new());
-            into_writer(payload, &mut data.0).expect("Failed to serialize payload to CBOR");
-            url.set_fragment(Some(data.to_string().as_str()));
+            let data =
+                canonical_cbor_into_vec(payload).expect("Failed to serialize payload to CBOR");
+            url.set_fragment(Some(ByteBufB64(data).to_string().as_str()));
         }
 
         url

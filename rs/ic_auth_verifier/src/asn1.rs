@@ -147,7 +147,7 @@ fn public_key_bytes(key_part: ASN1Block) -> Result<Vec<u8>, String> {
         }
         Ok(key_bytes)
     } else {
-        Err(format!("Expected BitString, got {:?}", key_part))
+        Err(format!("Expected BitString, got {key_part:?}"))
     }
 }
 
@@ -159,13 +159,13 @@ mod tests {
     fn test_user_public_key_from_der() {
         let data = hex::decode("303C300C060A2B0601040183B8430102032C000A0000000000000007010116FB513D360579FA1102D36E3BC8D53FB966F3AC9F717842B2B54C227582D786").unwrap();
         let (algo, pk) = user_public_key_from_der(&data).unwrap();
-        println!("Algorithm: {:?}", algo);
+        println!("Algorithm: {algo:?}");
         assert_eq!(algo, Algorithm::IcCanisterSignature);
         assert_eq!(pk.len(), 43);
 
         let data = hex::decode("302A300506032B65700321004258A79844B5BC3089D6467A2CA67DA33EAB4A96ADCD93E72349B75C0A4C5219").unwrap();
         let (algo, pk) = user_public_key_from_der(&data).unwrap();
-        println!("Algorithm: {:?}", algo);
+        println!("Algorithm: {algo:?}");
         assert_eq!(algo, Algorithm::Ed25519);
         assert_eq!(pk.len(), 32);
     }

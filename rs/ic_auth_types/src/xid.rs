@@ -68,7 +68,7 @@ impl FromStr for Xid {
         }
 
         if let Some(c) = s.chars().find(|&c| !matches!(c, '0'..='9' | 'a'..='v')) {
-            return Err(format!("Invalid character: {}", c));
+            return Err(format!("Invalid character: {c}"));
         }
 
         let bs = s.as_bytes();
@@ -187,7 +187,7 @@ impl Display for Xid {
 
 impl Debug for Xid {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Xid({})", self)
+        write!(f, "Xid({self})")
     }
 }
 
@@ -362,7 +362,7 @@ mod tests {
         ]);
         assert_eq!(xid.to_string(), "9m4e2mr0ui3e8a215n4g");
 
-        assert_eq!(format!("{:?}", xid), "Xid(9m4e2mr0ui3e8a215n4g)");
+        assert_eq!(format!("{xid:?}"), "Xid(9m4e2mr0ui3e8a215n4g)");
     }
 
     #[test]
@@ -372,7 +372,7 @@ mod tests {
             principal: Principal::anonymous(),
         };
         let data = serde_json::to_string(&t).unwrap();
-        println!("{}", data);
+        println!("{data}");
         assert_eq!(
             data,
             r#"{"thread":"00000000000000000000","principal":"2vxsx-fae"}"#
