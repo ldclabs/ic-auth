@@ -1,6 +1,5 @@
 use arc_swap::ArcSwap;
 use candid::Principal;
-use ed25519_consensus::SigningKey;
 use ic_agent::{
     identity::{Delegation, SignedDelegation},
     {Signature, agent::EnvelopeContent},
@@ -211,25 +210,13 @@ pub fn signed_delegation_from(src: ic_auth_types::SignedDelegation) -> SignedDel
     }
 }
 
-/// Creates a `BasicIdentity` from a 32-byte secret key.
-///
-/// # Parameters
-/// * `secret` - A 32-byte array containing the secret key.
-///
-/// # Returns
-/// A `BasicIdentity` initialized with the provided secret key.
-pub fn basic_identity(secret: [u8; 32]) -> BasicIdentity {
-    let key = SigningKey::from(secret);
-    BasicIdentity::from_signing_key(key)
-}
-
 /// Creates a new `BasicIdentity` with a randomly generated secret key.
 ///
 /// # Returns
 /// A `BasicIdentity` initialized with a randomly generated secret key.
 pub fn new_basic_identity() -> BasicIdentity {
     let secret: [u8; 32] = rand_bytes();
-    basic_identity(secret)
+    BasicIdentity::from_raw_key(&secret)
 }
 
 /// Creates a delegated identity from a basic identity with a specified expiration time.

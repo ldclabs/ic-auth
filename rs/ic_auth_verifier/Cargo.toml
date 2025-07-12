@@ -28,12 +28,10 @@ base64 = { workspace = true, optional = true }
 hex = { workspace = true }
 ic-agent = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
-ed25519-consensus = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 
 [dev-dependencies]
 ic-agent = { workspace = true }
-ed25519-consensus = { workspace = true }
 rand = { workspace = true }
 
 [features]
@@ -46,10 +44,4 @@ envelope = [
   "dep:url",
 ]
 # should not include `identity` feature for canister
-identity = [
-  "envelope",
-  "dep:ic-agent",
-  "dep:arc-swap",
-  "dep:ed25519-consensus",
-  "dep:rand",
-]
+identity = ["envelope", "dep:ic-agent", "dep:arc-swap", "dep:rand"]

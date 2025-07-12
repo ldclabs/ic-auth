@@ -650,7 +650,6 @@ impl From<SignedEnvelopeFull> for SignedEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_consensus::SigningKey;
     use ic_agent::{Identity, identity::BasicIdentity};
     use ic_canister_sig_creation::CanisterSigPublicKey;
 
@@ -659,8 +658,7 @@ mod tests {
     #[test]
     fn test_envelope_with_ed25519() {
         let secret = [8u8; 32];
-        let sk = SigningKey::from(secret);
-        let id = BasicIdentity::from_signing_key(sk);
+        let id = BasicIdentity::from_raw_key(&secret);
         println!("id: {:?}", id.sender().unwrap().to_text());
         // jjn6g-sh75l-r3cxb-wxrkl-frqld-6p6qq-d4ato-wske5-op7s5-n566f-bqe
 

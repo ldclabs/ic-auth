@@ -99,7 +99,6 @@ pub fn rand_bytes<const N: usize>() -> [u8; N] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ed25519_consensus::SigningKey as Ed25519SigningKey;
     use ic_agent::{
         Identity,
         identity::{BasicIdentity, Prime256v1Identity, Secp256k1Identity},
@@ -118,8 +117,7 @@ mod tests {
     #[test]
     fn should_work_with_ed25519() {
         let sk: [u8; 32] = rand_bytes();
-        let sk = Ed25519SigningKey::from(sk);
-        let id = BasicIdentity::from_signing_key(sk);
+        let id = BasicIdentity::from_raw_key(&sk);
         let sig = id.sign_arbitrary(MESSAGE).unwrap();
         let pk_der = id.public_key().unwrap();
         let (alg, pk) = user_public_key_from_der(&pk_der).unwrap();
