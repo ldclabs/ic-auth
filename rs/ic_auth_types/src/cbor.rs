@@ -4,12 +4,19 @@
 use ciborium::value::Value;
 use core::cmp::Ordering;
 use serde::ser;
+use std::io::Write;
 
 /// Serializes an object as CBOR into a new Vec<u8>
 pub fn cbor_into_vec<T: ?Sized + ser::Serialize>(value: &T) -> Result<Vec<u8>, String> {
     let mut data = Vec::new();
     ciborium::into_writer(&value, &mut data).map_err(|err| format!("{err:?}"))?;
     Ok(data)
+}
+
+/// Serializes an object as CBOR into a writer
+pub fn cbor_into<T: ?Sized + ser::Serialize, W: Write>(value: &T, w: W) -> Result<(), String> {
+    ciborium::into_writer(&value, w).map_err(|err| format!("{err:?}"))?;
+    Ok(())
 }
 
 /// Serializes an object as CBOR into a new Vec<u8> using RFC 8949 Deterministic Encoding.
@@ -20,6 +27,18 @@ pub fn canonical_cbor_into_vec<T: ?Sized + ser::Serialize>(value: &T) -> Result<
     let mut data = Vec::new();
     ciborium::into_writer(&value, &mut data).map_err(|err| format!("{err:?}"))?;
     Ok(data)
+}
+
+/// Serializes an object as CBOR into a writer using RFC 8949 Deterministic Encoding.
+pub fn canonical_cbor_into<T: ?Sized + ser::Serialize, W: Write>(
+    value: &T,
+    w: W,
+) -> Result<(), String> {
+    let value = Value::serialized(value).map_err(|err| format!("{err:?}"))?;
+
+    let value = canonical_value(value);
+    ciborium::into_writer(&value, w).map_err(|err| format!("{err:?}"))?;
+    Ok(())
 }
 
 /// Manually serialize values to compare them.

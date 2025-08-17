@@ -231,6 +231,13 @@ impl From<Vec<u8>> for ByteBufB64 {
     }
 }
 
+/// Implements `From<[u8; N]>` for `ByteBufB64` to allow easy conversion from a byte array.
+impl<const N: usize> From<[u8; N]> for ByteBufB64 {
+    fn from(bytes: [u8; N]) -> Self {
+        ByteBufB64(bytes.into())
+    }
+}
+
 /// Implements `From<ByteBuf>` for `ByteBufB64` to allow easy conversion from a `serde_bytes::ByteBuf`.
 impl From<ByteBuf> for ByteBufB64 {
     fn from(v: ByteBuf) -> Self {
