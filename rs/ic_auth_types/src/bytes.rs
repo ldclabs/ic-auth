@@ -1,15 +1,17 @@
 use base64::{
     Engine,
-    prelude::{BASE64_URL_SAFE, BASE64_URL_SAFE_NO_PAD},
+    prelude::{BASE64_STANDARD_NO_PAD, BASE64_URL_SAFE, BASE64_URL_SAFE_NO_PAD},
 };
 use candid::CandidType;
 use core::{
+    convert::TryFrom,
     fmt::{self, Debug, Display},
     ops::{Deref, DerefMut},
     str::FromStr,
 };
+use std::borrow::Cow;
 
-pub use serde_bytes::{self, ByteArray, ByteBuf, Bytes};
+pub use serde_bytes::{ByteArray, ByteBuf, Bytes};
 
 /// Wrapper around `Vec<u8>` to serialize and deserialize efficiently.
 /// If the serialization format is human readable (formats like JSON and YAML), it will be encoded in Base64URL.
@@ -74,6 +76,16 @@ impl ByteBufB64 {
     pub fn into_iter(self) -> <Vec<u8> as IntoIterator>::IntoIter {
         self.0.into_iter()
     }
+
+    /// Returns the length of the contained byte buffer.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns true if the contained byte buffer has a length of 0.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
 }
 
 /// Wrapper around `[u8; N]` to serialize and deserialize efficiently.
@@ -131,6 +143,26 @@ impl<const N: usize> ByteArrayB64<N> {
     #[allow(clippy::should_implement_trait)]
     pub fn into_iter(self) -> <[u8; N] as IntoIterator>::IntoIter {
         self.0.into_iter()
+    }
+
+    /// Returns the length of the contained byte array (always N).
+    pub const fn len(&self) -> usize {
+        N
+    }
+
+    /// Returns true if N == 0.
+    pub const fn is_empty(&self) -> bool {
+        N == 0
+    }
+
+    /// Returns the underlying bytes as a slice.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Returns the underlying bytes as a mutable slice.
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.0
     }
 }
 
@@ -259,11 +291,31 @@ impl<const N: usize> From<ByteArray<N>> for ByteArrayB64<N> {
     }
 }
 
+/// Implements `TryFrom<&[u8]>` for `ByteArrayB64<N>` to allow checked conversion from a slice.
+impl<const N: usize> TryFrom<&[u8]> for ByteArrayB64<N> {
+    type Error = core::array::TryFromSliceError;
+
+    fn try_from(s: &[u8]) -> Result<Self, Self::Error> {
+        let arr: [u8; N] = s.try_into()?;
+        Ok(ByteArrayB64(arr))
+    }
+}
+
+/// Implements `TryFrom<Vec<u8>>` for `ByteArrayB64<N>` to allow checked conversion from a Vec<u8>.
+impl<const N: usize> TryFrom<Vec<u8>> for ByteArrayB64<N> {
+    type Error = Vec<u8>;
+
+    fn try_from(s: Vec<u8>) -> Result<Self, Self::Error> {
+        let arr: [u8; N] = s.try_into()?;
+        Ok(ByteArrayB64(arr))
+    }
+}
+
 /// Implements `FromStr` for `ByteBufB64` to allow easy conversion from a Base64URL encoded string.
 impl FromStr for ByteBufB64 {
     type Err = base64::DecodeError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let v = BASE64_URL_SAFE_NO_PAD.decode(s.trim_end_matches('='))?;
+        let v = try_from_base64(s)?;
         Ok(ByteBufB64(v))
     }
 }
@@ -281,7 +333,7 @@ impl TryFrom<&str> for ByteBufB64 {
 impl<const N: usize> FromStr for ByteArrayB64<N> {
     type Err = base64::DecodeError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let v = BASE64_URL_SAFE_NO_PAD.decode(s.trim_end_matches('='))?;
+        let v = try_from_base64(s)?;
         let l = v.len();
         let v: [u8; N] = v
             .try_into()
@@ -296,6 +348,165 @@ impl<const N: usize> TryFrom<&str> for ByteArrayB64<N> {
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
         ByteArrayB64::from_str(s)
+    }
+}
+
+/// Wrapper around borrowed/owned byte slice to serialize and deserialize efficiently.
+/// If the serialization format is human readable (formats like JSON and YAML), it will be encoded in Base64URL.
+/// Otherwise, it will be serialized as a byte array.
+///
+/// This type mirrors serde_bytes::Bytes (borrow or own) while following the Base64URL
+/// behavior consistent with ByteBufB64 in human-readable formats.
+#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct BytesB64<'a>(pub Cow<'a, [u8]>);
+
+impl<'a> BytesB64<'a> {
+    /// Construct a new, empty `BytesB64`.
+    pub fn new() -> Self {
+        BytesB64(Cow::Borrowed(&[]))
+    }
+
+    /// Wrap a borrowed slice.
+    pub fn from_slice(slice: &'a [u8]) -> Self {
+        BytesB64(Cow::Borrowed(slice))
+    }
+
+    /// Wrap an owned vector.
+    pub fn from_vec(vec: Vec<u8>) -> Self {
+        BytesB64(Cow::Owned(vec))
+    }
+
+    /// Turn this into an owned Vec<u8>.
+    pub fn into_owned(self) -> Vec<u8> {
+        self.0.into_owned()
+    }
+
+    /// Returns the length of the contained byte slice.
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Returns true if the contained byte slice has a length of 0.
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl<'a> Display for BytesB64<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", BASE64_URL_SAFE.encode(self.0.as_ref()))
+    }
+}
+
+impl<'a> Debug for BytesB64<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "BytesB64({self})")
+    }
+}
+
+/// Implements `AsRef<[u8]>` for `BytesB64` to allow borrowing the underlying byte slice.
+impl<'a> AsRef<[u8]> for BytesB64<'a> {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+/// Implements `Deref` for `BytesB64` to allow transparent access to the underlying byte slice.
+impl<'a> Deref for BytesB64<'a> {
+    type Target = [u8];
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_ref()
+    }
+}
+
+/// Implements `From<&[u8]>` for `BytesB64` to allow easy conversion from a byte slice.
+impl<'a> From<&'a [u8]> for BytesB64<'a> {
+    fn from(s: &'a [u8]) -> Self {
+        BytesB64(Cow::Borrowed(s))
+    }
+}
+
+/// Implements `From<Vec<u8>>` for `BytesB64` to allow easy conversion from a byte vector.
+impl<'a> From<Vec<u8>> for BytesB64<'a> {
+    fn from(v: Vec<u8>) -> Self {
+        BytesB64(Cow::Owned(v))
+    }
+}
+
+/// Implements `From<ByteBuf>` for `BytesB64` to allow easy conversion from a `serde_bytes::ByteBuf`.
+impl<'a> From<&'a ByteBuf> for BytesB64<'a> {
+    fn from(v: &'a ByteBuf) -> Self {
+        BytesB64(Cow::Borrowed(v.as_ref()))
+    }
+}
+
+/// Implements `From<&'a ByteArray<N>>` for `BytesB64`
+impl<'a, const N: usize> From<&'a ByteArray<N>> for BytesB64<'a> {
+    fn from(v: &'a ByteArray<N>) -> Self {
+        BytesB64(Cow::Borrowed(v.as_ref()))
+    }
+}
+
+/// Implements `From<Bytes<'a>>` for `BytesB64<'a>` to allow easy conversion from a `serde_bytes::Bytes<'a>`.
+impl<'a> From<&'a Bytes> for BytesB64<'a> {
+    fn from(v: &'a Bytes) -> Self {
+        BytesB64(Cow::Borrowed(v))
+    }
+}
+
+/// Implements `From<&'a ByteBufB64>` for `BytesB64`
+impl<'a> From<&'a ByteBufB64> for BytesB64<'a> {
+    fn from(v: &'a ByteBufB64) -> Self {
+        BytesB64(Cow::Borrowed(v.0.as_ref()))
+    }
+}
+
+/// Implements `From<&'a ByteArrayB64<N>>` for `BytesB64`
+impl<'a, const N: usize> From<&'a ByteArrayB64<N>> for BytesB64<'a> {
+    fn from(v: &'a ByteArrayB64<N>) -> Self {
+        BytesB64(Cow::Borrowed(v.0.as_ref()))
+    }
+}
+
+/// Implements `FromStr` for `BytesB64` to allow easy conversion from a Base64URL encoded string.
+impl<'a> FromStr for BytesB64<'a> {
+    type Err = base64::DecodeError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let v = try_from_base64(s)?;
+        Ok(BytesB64(Cow::Owned(v)))
+    }
+}
+
+/// Implements `From<&str>` for `BytesB64` to allow easy conversion from a Base64URL encoded string.
+impl<'a> TryFrom<&str> for BytesB64<'a> {
+    type Error = base64::DecodeError;
+
+    fn try_from(s: &str) -> Result<Self, Self::Error> {
+        BytesB64::from_str(s)
+    }
+}
+
+fn try_from_base64(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    let v = s.trim_end_matches('=');
+    if v.contains(['+', '/']) {
+        BASE64_STANDARD_NO_PAD.decode(v)
+    } else {
+        BASE64_URL_SAFE_NO_PAD.decode(v)
+    }
+}
+
+/// Implements `serde::Serialize` for `BytesB64`.
+/// Uses Base64URL encoding for human-readable formats and raw bytes for binary formats.
+impl<'a> serde::Serialize for BytesB64<'a> {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            BASE64_URL_SAFE
+                .encode(self.0.as_ref())
+                .serialize(serializer)
+        } else {
+            serializer.serialize_bytes(self.0.as_ref())
+        }
     }
 }
 
@@ -327,15 +538,10 @@ impl<const N: usize> serde::Serialize for ByteArrayB64<N> {
 /// Handles both Base64URL encoded strings (for human-readable formats) and raw bytes (for binary formats).
 impl<'de> serde::Deserialize<'de> for ByteBufB64 {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use serde::de::Error;
         if deserializer.is_human_readable() {
-            deserializer
-                .deserialize_str(deserialize::ByteBufB64Visitor)
-                .map_err(D::Error::custom)
+            deserializer.deserialize_str(deserialize::ByteBufB64Visitor)
         } else {
-            deserializer
-                .deserialize_bytes(deserialize::ByteBufB64Visitor)
-                .map_err(D::Error::custom)
+            deserializer.deserialize_bytes(deserialize::ByteBufB64Visitor)
         }
     }
 }
@@ -344,15 +550,10 @@ impl<'de> serde::Deserialize<'de> for ByteBufB64 {
 /// Handles both Base64URL encoded strings (for human-readable formats) and raw bytes (for binary formats).
 impl<'de, const N: usize> serde::Deserialize<'de> for ByteArrayB64<N> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use serde::de::Error;
         if deserializer.is_human_readable() {
-            deserializer
-                .deserialize_str(deserialize::ByteArrayB64Visitor)
-                .map_err(D::Error::custom)
+            deserializer.deserialize_str(deserialize::ByteArrayB64Visitor)
         } else {
-            deserializer
-                .deserialize_bytes(deserialize::ByteArrayB64Visitor)
-                .map_err(D::Error::custom)
+            deserializer.deserialize_bytes(deserialize::ByteArrayB64Visitor)
         }
     }
 }
@@ -436,7 +637,11 @@ mod deserialize {
         where
             E: serde::de::Error,
         {
-            let bytes = v.try_into().map_err(E::custom)?;
+            if v.len() != N {
+                return Err(E::invalid_length(v.len(), &self));
+            }
+            let mut bytes = [0u8; N];
+            bytes.copy_from_slice(v);
             Ok(ByteArrayB64(bytes))
         }
 
@@ -453,6 +658,11 @@ mod deserialize {
                     .ok_or_else(|| V::Error::invalid_length(idx, &self))?;
             }
 
+            // If there are extra elements, report an error for clearer diagnostics.
+            if let Some(_extra) = seq.next_element::<serde::de::IgnoredAny>()? {
+                return Err(V::Error::invalid_length(N + 1, &self));
+            }
+
             Ok(ByteArrayB64(bytes))
         }
     }
@@ -461,6 +671,7 @@ mod deserialize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::prelude::BASE64_STANDARD;
     use candid::encode_one;
     use serde::{Deserialize, Serialize};
 
@@ -504,5 +715,91 @@ mod tests {
         assert_eq!(a, encode_one(ByteBuf::from(vec![1, 2, 3, 4])).unwrap());
         assert_eq!(a, encode_one(ByteBufB64::from(vec![1, 2, 3, 4])).unwrap());
         assert_eq!(a, encode_one(ByteArrayB64::from([1, 2, 3, 4])).unwrap());
+    }
+
+    #[test]
+    fn test_from_str_accepts_standard_and_url() {
+        let data = vec![0u8, 1, 2, 253, 254, 255];
+
+        let std_s = BASE64_STANDARD.encode(&data); // 标准 base64（含 '+' '/'）
+        let url_s = BASE64_URL_SAFE.encode(&data); // URL safe base64（含 '-' '_'）
+
+        let a = ByteBufB64::from_str(&std_s).unwrap();
+        let b = ByteBufB64::from_str(&url_s).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(a, ByteBufB64::from(data.clone()));
+
+        // ByteArrayB64 同样如此
+        let arr: [u8; 6] = data.clone().try_into().unwrap();
+        let a2 = ByteArrayB64::<6>::from_str(&std_s).unwrap();
+        let b2 = ByteArrayB64::<6>::from_str(&url_s).unwrap();
+        assert_eq!(a2, b2);
+        assert_eq!(a2, ByteArrayB64::<6>::from(arr));
+    }
+
+    #[test]
+    fn test_display_is_url_safe_padded() {
+        // 选择一些字节，标准 base64 可能包含 '+' '/'，以验证显示时统一为 URL safe
+        let data = vec![251u8, 255, 239]; // 只是示例
+        let expected_url = BASE64_URL_SAFE.encode(&data);
+
+        let bb = ByteBufB64::from(data.clone());
+        assert_eq!(bb.to_string(), expected_url);
+
+        let ab = ByteArrayB64::<3>::from([251u8, 255, 239]);
+        assert_eq!(ab.to_string(), expected_url);
+    }
+
+    #[test]
+    fn test_serde_deserialize_from_standard_and_url_strs() {
+        #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+        struct S {
+            d: ByteBufB64,
+        }
+
+        let data = vec![9u8, 8, 7, 6, 5, 4];
+        let std_s = BASE64_STANDARD.encode(&data);
+        let url_s = BASE64_URL_SAFE.encode(&data);
+
+        // 标准 base64
+        let s_std = format!(r#"{{"d":"{std_s}"}}"#);
+        let parsed_std: S = serde_json::from_str(&s_std).unwrap();
+        assert_eq!(
+            parsed_std,
+            S {
+                d: data.clone().into()
+            }
+        );
+
+        // base64-url
+        let s_url = format!(r#"{{"d":"{url_s}"}}"#);
+        let parsed_url: S = serde_json::from_str(&s_url).unwrap();
+        assert_eq!(
+            parsed_url,
+            S {
+                d: data.clone().into()
+            }
+        );
+    }
+
+    #[test]
+    fn test_bytearray_invalid_length_error() {
+        let data = vec![1u8, 2, 3, 4, 5];
+        let s = BASE64_URL_SAFE.encode(&data);
+        let err = ByteArrayB64::<4>::from_str(&s).unwrap_err();
+        assert_eq!(err, base64::DecodeError::InvalidLength(5));
+    }
+
+    #[test]
+    fn test_bytesb64_from_str_standard_and_url() {
+        let data = vec![10u8, 20, 30, 40, 50, 60, 70];
+        let std_s = BASE64_STANDARD.encode(&data);
+        let url_s = BASE64_URL_SAFE.encode(&data);
+
+        let b_std = BytesB64::from_str(&std_s).unwrap();
+        let b_url = BytesB64::from_str(&url_s).unwrap();
+
+        assert_eq!(b_std.as_ref(), data.as_slice());
+        assert_eq!(b_url.as_ref(), data.as_slice());
     }
 }
