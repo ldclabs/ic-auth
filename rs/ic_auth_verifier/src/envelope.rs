@@ -13,7 +13,7 @@ use ic_canister_sig_creation::delegation_signature_msg;
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "identity")]
-use ic_agent::Identity;
+use ic_agent::{Identity, Signature};
 
 use crate::{Algorithm, sha3_256, user_public_key_from_der, verify_basic_sig};
 
@@ -123,7 +123,7 @@ pub struct SignedEnvelope {
     /// The public key of the self-authenticating principal this request is from.
     /// This is the head of the delegation chain (if any) and is used to derive
     /// the principal ID of the sender.
-    #[serde(rename = "p", alias = "pubkey")]
+    #[serde(rename = "p", alias = "pubkey", alias = "public_key")]
     pub pubkey: ByteBufB64,
 
     /// A cryptographic signature authorizing the request.
@@ -134,8 +134,9 @@ pub struct SignedEnvelope {
 
     /// The request content's hash digest that was signed by the sender.
     /// This is typically a SHA-256 or SHA3-256 hash of the request content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(rename = "h", alias = "digest")]
-    pub digest: ByteBufB64,
+    pub digest: Option<ByteBufB64>,
 
     /// The chain of delegations connecting `pubkey` to `signature`, in order.
     /// Each delegation authorizes the next entity in the chain to sign on behalf
@@ -144,6 +145,37 @@ pub struct SignedEnvelope {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(rename = "d", alias = "delegation")]
     pub delegation: Option<Vec<SignedDelegationCompact>>,
+}
+
+#[cfg(feature = "identity")]
+impl TryFrom<Signature> for SignedEnvelope {
+    type Error = String;
+    fn try_from(sig: Signature) -> Result<Self, Self::Error> {
+        Ok(Self {
+            pubkey: sig
+                .public_key
+                .ok_or_else(|| "missing public_key".to_string())?
+                .into(),
+            signature: sig
+                .signature
+                .ok_or_else(|| "missing signature".to_string())?
+                .into(),
+            digest: None,
+            delegation: sig.delegations.map(|delegations| {
+                delegations
+                    .into_iter()
+                    .map(|d| SignedDelegationCompact {
+                        delegation: DelegationCompact {
+                            pubkey: d.delegation.pubkey.into(),
+                            expiration: d.delegation.expiration,
+                            targets: d.delegation.targets,
+                        },
+                        signature: d.signature.into(),
+                    })
+                    .collect::<Vec<_>>()
+            }),
+        })
+    }
 }
 
 impl SignedEnvelope {
@@ -233,7 +265,7 @@ impl SignedEnvelope {
                 .signature
                 .ok_or_else(|| "missing signature".to_string())?
                 .into(),
-            digest: digest.into(),
+            digest: Some(digest.into()),
             delegation: sig.delegations.map(|delegations| {
                 delegations
                     .into_iter()
@@ -274,11 +306,19 @@ impl SignedEnvelope {
         expect_target: Option<Principal>,
         expect_digest: Option<&[u8]>,
     ) -> Result<(), String> {
-        if let Some(expect_digest) = expect_digest {
-            if self.digest.as_ref() != expect_digest {
-                return Err("Content digest does not match".to_string());
+        let digest = match (self.digest.as_ref(), expect_digest) {
+            (Some(digest), Some(expect_digest)) => {
+                if digest.as_slice() != expect_digest {
+                    return Err("Content digest does not match".to_string());
+                }
+                digest
             }
-        }
+            (Some(digest), None) => digest.as_slice(),
+            (None, Some(expect_digest)) => expect_digest,
+            (None, None) => {
+                return Err("No content digest provided for verification".to_string());
+            }
+        };
 
         let mut last_verified = &self.pubkey;
         if let Some(delegation) = &self.delegation {
@@ -340,7 +380,7 @@ impl SignedEnvelope {
             }
         }
 
-        verify_sig(last_verified, &self.digest, &self.signature)
+        verify_sig(last_verified, digest, &self.signature)
     }
 
     /// Extracts a SignedEnvelope from the Authorization header.
@@ -403,7 +443,7 @@ impl SignedEnvelope {
                     let mut envelope = Self {
                         pubkey: pubkey.into(),
                         signature: signature.into(),
-                        digest: digest.into(),
+                        digest: Some(digest.into()),
                         delegation: None,
                     };
                     match extract_data(headers, &HEADER_IC_AUTH_DELEGATION) {
@@ -440,15 +480,14 @@ impl SignedEnvelope {
                 .parse()
                 .map_err(|err| format!("insert {HEADER_IC_AUTH_PUBKEY} header failed: {err}"))?,
         );
-        headers.insert(
-            &HEADER_IC_AUTH_CONTENT_DIGEST,
-            URL_SAFE_NO_PAD
-                .encode(&self.digest)
-                .parse()
-                .map_err(|err| {
+        if let Some(digest) = &self.digest {
+            headers.insert(
+                &HEADER_IC_AUTH_CONTENT_DIGEST,
+                URL_SAFE_NO_PAD.encode(digest).parse().map_err(|err| {
                     format!("insert {HEADER_IC_AUTH_CONTENT_DIGEST} header failed: {err}")
                 })?,
-        );
+            );
+        }
         headers.insert(
             &HEADER_IC_AUTH_SIGNATURE,
             URL_SAFE_NO_PAD
@@ -613,8 +652,9 @@ pub struct SignedEnvelopeFull {
     #[serde(alias = "s")]
     pub signature: ByteBufB64,
 
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(alias = "h")]
-    pub digest: ByteBufB64,
+    pub digest: Option<ByteBufB64>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(alias = "d")]
@@ -673,10 +713,22 @@ mod tests {
                 .is_ok()
         );
 
-        se2.digest = sha3_256(b"hello world 2").to_vec().into();
+        se2.digest = Some(sha3_256(b"hello world 2").to_vec().into());
         assert!(
             se2.verify(unix_timestamp().as_millis() as u64, None, None)
                 .is_err()
+        );
+
+        let digest = sha3_256(msg);
+        let sig = id.sign_arbitrary(digest.as_slice()).unwrap();
+        let se: SignedEnvelope = sig.try_into().unwrap();
+        assert!(
+            se.verify(
+                unix_timestamp().as_millis() as u64,
+                None,
+                Some(digest.as_slice())
+            )
+            .is_ok()
         );
     }
 
