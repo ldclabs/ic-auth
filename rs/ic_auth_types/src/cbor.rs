@@ -2,7 +2,6 @@
 // https://github.com/ldclabs/ciborium/blob/main/ciborium/src/value/canonical.rs
 
 use ciborium::value::Value;
-use core::cmp::Ordering;
 use serde::ser;
 use std::io::Write;
 
@@ -20,98 +19,98 @@ pub fn cbor_into<T: ?Sized + ser::Serialize, W: Write>(value: &T, w: W) -> Resul
 }
 
 /// Serializes an object as CBOR into a new Vec<u8> using RFC 8949 Deterministic Encoding.
-pub fn canonical_cbor_into_vec<T: ?Sized + ser::Serialize>(value: &T) -> Result<Vec<u8>, String> {
+pub fn deterministic_cbor_into_vec<T: ?Sized + ser::Serialize>(
+    value: &T,
+) -> Result<Vec<u8>, String> {
     let value = Value::serialized(value).map_err(|err| format!("{err:?}"))?;
 
-    let value = canonical_value(value);
+    let value = deterministic_value(value)?;
     let mut data = Vec::new();
     ciborium::into_writer(&value, &mut data).map_err(|err| format!("{err:?}"))?;
     Ok(data)
 }
 
 /// Serializes an object as CBOR into a writer using RFC 8949 Deterministic Encoding.
-pub fn canonical_cbor_into<T: ?Sized + ser::Serialize, W: Write>(
+pub fn deterministic_cbor_into<T: ?Sized + ser::Serialize, W: Write>(
     value: &T,
     w: W,
 ) -> Result<(), String> {
     let value = Value::serialized(value).map_err(|err| format!("{err:?}"))?;
 
-    let value = canonical_value(value);
+    let value = deterministic_value(value)?;
     ciborium::into_writer(&value, w).map_err(|err| format!("{err:?}"))?;
     Ok(())
 }
 
-/// Manually serialize values to compare them.
-fn serialized_canonical_cmp(v1: &Value, v2: &Value) -> Ordering {
-    // There is an optimization to be done here, but it would take a lot more code
-    // and using mixing keys, Arrays or Maps as CanonicalValue is probably not the
-    // best use of this type as it is meant mainly to be used as keys.
-
-    let mut bytes1 = Vec::new();
-    let _ = ciborium::into_writer(v1, &mut bytes1);
-    let mut bytes2 = Vec::new();
-    let _ = ciborium::into_writer(v2, &mut bytes2);
-
-    match bytes1.len().cmp(&bytes2.len()) {
-        Ordering::Equal => bytes1.cmp(&bytes2),
-        x => x,
-    }
-}
-
-fn cmp_value(v1: &Value, v2: &Value) -> Ordering {
-    use Value::*;
-
-    match (v1, v2) {
-        (Integer(i), Integer(o)) => {
-            // Because of the first rule above, two numbers might be in a different
-            // order than regular i128 comparison. For example, 10 < -1 in
-            // canonical ordering, since 10 serializes to `0x0a` and -1 to `0x20`,
-            // and -1 < -1000 because of their lengths.
-            i.canonical_cmp(o)
-        }
-        (Text(s), Text(o)) => match s.len().cmp(&o.len()) {
-            Ordering::Equal => s.cmp(o),
-            x => x,
-        },
-        (Bool(s), Bool(o)) => s.cmp(o),
-        (Null, Null) => Ordering::Equal,
-        (Tag(t, v), Tag(ot, ov)) => match Value::from(*t).partial_cmp(&Value::from(*ot)) {
-            Some(Ordering::Equal) | None => match v.partial_cmp(ov) {
-                Some(x) => x,
-                None => serialized_canonical_cmp(v1, v2),
-            },
-            Some(x) => x,
-        },
-        (_, _) => serialized_canonical_cmp(v1, v2),
-    }
-}
-
-fn canonical_value(value: Value) -> Value {
+fn deterministic_value(value: Value) -> Result<Value, String> {
     match value {
         Value::Map(entries) => {
-            let mut canonical_entries: Vec<(Value, Value)> = entries
-                .into_iter()
-                .map(|(k, v)| (canonical_value(k), canonical_value(v)))
-                .collect();
+            let mut deterministic_entries: Vec<(Vec<u8>, (Value, Value))> =
+                Vec::with_capacity(entries.len());
+            for (k, v) in entries {
+                let k = deterministic_value(k)?;
+                let v = deterministic_value(v)?;
+                let b = cbor_into_vec(&k)?;
+                deterministic_entries.push((b, (k, v)));
+            }
 
-            // Sort entries based on the canonical comparison of their keys.
-            // cmp_value (defined in this file) implements RFC 8949 key sorting.
-            canonical_entries.sort_by(|(k1, _), (k2, _)| cmp_value(k1, k2));
-
-            Value::Map(canonical_entries)
+            // RFC 8949 Deterministic Encoding: The keys in every map MUST be sorted in the bytewise lexicographic order of their deterministic encodings.
+            deterministic_entries.sort_by(|(k1, _), (k2, _)| k1.cmp(&k2));
+            Ok(Value::Map(
+                deterministic_entries.into_iter().map(|(_, v)| v).collect(),
+            ))
         }
         Value::Array(elements) => {
-            let canonical_elements: Vec<Value> =
-                elements.into_iter().map(canonical_value).collect();
-            Value::Array(canonical_elements)
+            let mut deterministic_elements: Vec<Value> = Vec::with_capacity(elements.len());
+            for e in elements {
+                deterministic_elements.push(deterministic_value(e)?);
+            }
+            Ok(Value::Array(deterministic_elements))
         }
         Value::Tag(tag, inner_value) => {
             // The tag itself is a u64; its representation is handled by the serializer.
             // The inner value must be in canonical form.
-            Value::Tag(tag, Box::new(canonical_value(*inner_value)))
+            Ok(Value::Tag(
+                tag,
+                Box::new(deterministic_value(*inner_value)?),
+            ))
         }
         // Other Value variants (Integer, Bytes, Text, Bool, Null, Float)
         // are considered "canonical" in their structure.
-        _ => value,
+        _ => Ok(value),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_deterministic_value() {
+        // https://datatracker.ietf.org/doc/html/rfc8949#section-4.2.1
+        let value1 = vec![
+            (Value::from(10), Value::from(10)),     // 0x0a
+            (Value::from(100), Value::from(100)),   // 0x1864
+            (Value::from(-1), Value::from(-1)),     // 0x20
+            (Value::from("z"), Value::from("z")),   // 0x617a
+            (Value::from("aa"), Value::from("aa")), // 0x626161
+            (
+                Value::Array(vec![Value::from(100)]),
+                Value::Array(vec![Value::from(100)]),
+            ), // 0x811864
+            (
+                Value::Array(vec![Value::from(-1)]),
+                Value::Array(vec![Value::from(-1)]),
+            ), // 0x8120
+            (Value::from(false), Value::from(false)), // 0xf4
+        ];
+        let value2 = value1.iter().cloned().rev().collect::<Vec<_>>();
+
+        let data1 = cbor_into_vec(&Value::Map(value1)).unwrap();
+        println!("{}", hex::encode(&data1));
+        // a80a0a186418642020617a617a62616162616181186481186481208120f4f4
+        let data2 = deterministic_cbor_into_vec(&Value::Map(value2)).unwrap();
+        println!("{}", hex::encode(&data2));
+        assert_eq!(data1, data2);
     }
 }

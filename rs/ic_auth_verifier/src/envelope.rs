@@ -7,7 +7,7 @@ use ciborium::from_reader;
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName};
 use ic_auth_types::{
     ByteBufB64, DelegationCompact, SignedDelegation, SignedDelegationCompact,
-    canonical_cbor_into_vec,
+    deterministic_cbor_into_vec,
 };
 use ic_canister_sig_creation::delegation_signature_msg;
 use serde::{Deserialize, Serialize};
@@ -195,7 +195,7 @@ impl SignedEnvelope {
     /// # Returns
     /// * `Vec<u8>` - The CBOR-encoded binary representation of the envelope
     pub fn to_bytes(&self) -> Vec<u8> {
-        canonical_cbor_into_vec(&self).expect("failed to encode SignedEnvelope")
+        deterministic_cbor_into_vec(&self).expect("failed to encode SignedEnvelope")
     }
 
     /// Decodes a SignedEnvelope from its binary representation.
@@ -322,9 +322,6 @@ impl SignedEnvelope {
 
         let mut last_verified = &self.pubkey;
         if let Some(delegation) = &self.delegation {
-            if delegation.is_empty() {
-                return Err("Delegation chain is empty".to_string());
-            }
             if delegation.len() > 5 {
                 return Err(format!(
                     "Delegation chain length exceeds the limit 5: {}",
@@ -499,7 +496,7 @@ impl SignedEnvelope {
             headers.insert(
                 &HEADER_IC_AUTH_DELEGATION,
                 URL_SAFE_NO_PAD
-                    .encode(canonical_cbor_into_vec(&delegations)?)
+                    .encode(deterministic_cbor_into_vec(&delegations)?)
                     .parse()
                     .map_err(|err| {
                         format!("insert {HEADER_IC_AUTH_DELEGATION} header failed: {err}")
@@ -690,6 +687,7 @@ impl From<SignedEnvelopeFull> for SignedEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ciborium::value::Value;
     use ic_agent::{Identity, identity::BasicIdentity};
     use ic_canister_sig_creation::CanisterSigPublicKey;
 
@@ -722,6 +720,58 @@ mod tests {
         let digest = sha3_256(msg);
         let sig = id.sign_arbitrary(digest.as_slice()).unwrap();
         let se: SignedEnvelope = sig.try_into().unwrap();
+        assert!(
+            se.verify(
+                unix_timestamp().as_millis() as u64,
+                None,
+                Some(digest.as_slice())
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn test_envelope_with_ed25519_2() {
+        // test data from ts/ic-auth/src/identity.test.ts
+        let secret = [8u8; 32];
+        let id = BasicIdentity::from_raw_key(&secret);
+
+        let msg = "pGFk92FoWCDy_PBrUtbrh328ZTWvrZnuiE2EMKHfMz_1M6f3JN1nq2FwWCwwKjAFBgMrZXADIQATmPYsbRpFfFG6aktfPb0vafypMhYhjciZfkFr0X2TymFzWEAzEYt2uq3q2BiMmgz91CLI6Sj0Vs90pE-bTd37h35FpBOonchIBqXyjtBpnfguDbZkKzy_VWbs9bDx29_5lqwD";
+        let se = SignedEnvelope::from_base64(msg).unwrap();
+        assert_eq!(id.public_key().unwrap(), se.pubkey.as_slice());
+        assert_eq!(
+            se.digest.as_ref().unwrap().as_slice(),
+            hex::decode("f2fcf06b52d6eb877dbc6535afad99ee884d8430a1df333ff533a7f724dd67ab")
+                .unwrap()
+                .as_slice()
+        );
+
+        assert!(
+            se.verify(unix_timestamp().as_millis() as u64, None, None)
+                .is_ok()
+        );
+
+        let msg = "o2Fk92FwWCwwKjAFBgMrZXADIQATmPYsbRpFfFG6aktfPb0vafypMhYhjciZfkFr0X2TymFzWEAzEYt2uq3q2BiMmgz91CLI6Sj0Vs90pE-bTd37h35FpBOonchIBqXyjtBpnfguDbZkKzy_VWbs9bDx29_5lqwD";
+        let se = SignedEnvelope::from_base64(msg).unwrap();
+        assert_eq!(id.public_key().unwrap(), se.pubkey.as_slice());
+        assert_eq!(se.digest, None);
+
+        assert!(
+            se.verify(unix_timestamp().as_millis() as u64, None, None)
+                .is_err()
+        );
+
+        let obj = vec![
+            (Value::from("z"), Value::from("z")),     // 0x617a
+            (Value::from("aa"), Value::from("aa")),   // 0x626161
+            (Value::from(10), Value::from(10)),       // 0x0a
+            (Value::from(100), Value::from(100)),     // 0x1864
+            (Value::from(-1), Value::from(-1)),       // 0x20
+            (Value::from(false), Value::from(false)), // 0xf4
+        ];
+
+        let data = deterministic_cbor_into_vec(&Value::Map(obj)).unwrap();
+        let digest = sha3_256(&data);
         assert!(
             se.verify(
                 unix_timestamp().as_millis() as u64,
