@@ -55,7 +55,7 @@ fn deterministic_value(value: Value) -> Result<Value, String> {
             }
 
             // RFC 8949 Deterministic Encoding: The keys in every map MUST be sorted in the bytewise lexicographic order of their deterministic encodings.
-            deterministic_entries.sort_by(|(k1, _), (k2, _)| k1.cmp(&k2));
+            deterministic_entries.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
             Ok(Value::Map(
                 deterministic_entries.into_iter().map(|(_, v)| v).collect(),
             ))
