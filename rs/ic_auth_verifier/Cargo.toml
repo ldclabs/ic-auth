@@ -48,3 +48,4 @@ identity = ["envelope", "dep:ic-agent", "dep:arc-swap", "dep:rand"]
 
 [package.metadata.docs.rs]
 all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
