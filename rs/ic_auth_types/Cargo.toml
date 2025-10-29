@@ -25,3 +25,6 @@ serde_json = { workspace = true }
 default = []
 full = ["xid"]
 xid = ["dep:xid"]
+
+[package.metadata.docs.rs]
+all-features = true

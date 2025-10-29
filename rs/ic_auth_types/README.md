@@ -16,19 +16,20 @@
 - **Authentication Primitives**: Includes types for delegations, signed delegations, and authentication responses.
 - **Candid Compatibility**: All types implement `CandidType` for seamless integration with the Internet Computer.
 - **Serde Support**: Full serialization/deserialization support for both human-readable (JSON) and binary formats (CBOR).
+- **RFC 8949 Deterministic Encoding**: Use `deterministic_cbor_into` and `deterministic_cbor_into_vec` to ensure consistent binary representation for cryptographic operations.
 
 ## Usage
 
 Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
-ic_auth_types = "0.4"
+ic_auth_types = "0.7"
 ```
 
 Enables interoperability with the original `xid` crate:
 ```toml
 [dependencies]
-ic_auth_types = { version = "0.4", features = ["xid"] }
+ic_auth_types = { version = "0.7", features = ["xid"] }
 ```
 
 ## Related Crates

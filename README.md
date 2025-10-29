@@ -31,19 +31,20 @@ A Rust library providing essential data structures and utilities for working wit
 - **Authentication Primitives**: Includes types for delegations, signed delegations, and authentication responses
 - **Candid Compatibility**: All types implement `CandidType` for seamless integration with the Internet Computer
 - **Serde Support**: Full serialization/deserialization support for both human-readable (JSON) and binary formats (CBOR)
+- **RFC 8949 Deterministic Encoding**: Use `deterministic_cbor_into` and `deterministic_cbor_into_vec` to ensure consistent binary representation for cryptographic operations.
 
 #### Installation
 
 ```toml
 [dependencies]
-ic_auth_types = "0.4"  # Replace with the latest version
+ic_auth_types = "0.7"  # Replace with the latest version
 ```
 
 With XID compatibility:
 
 ```toml
 [dependencies]
-ic_auth_types = { version = "0.4", features = ["full"] }
+ic_auth_types = { version = "0.7", features = ["full"] }
 ```
 
 ### `ic_auth_verifier`
@@ -61,14 +62,14 @@ A Rust library for signing and verifying cryptographic signatures in the IC-Auth
 
 ```toml
 [dependencies]
-ic_auth_verifier = "0.4"  # Replace with the latest version
+ic_auth_verifier = "0.7"  # Replace with the latest version
 ```
 
 With envelope support:
 
 ```toml
 [dependencies]
-ic_auth_verifier = { version = "0.4", features = ["full"] }
+ic_auth_verifier = { version = "0.7", features = ["full"] }
 ```
 
 ## Usage Examples

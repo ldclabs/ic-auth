@@ -27,20 +27,20 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ic_auth_verifier = "0.4"  # Replace with the latest version
+ic_auth_verifier = "0.7"  # Replace with the latest version
 ```
 
 To enable the `envelope` feature:
 
 ```toml
 [dependencies]
-ic_auth_verifier = { version = "0.4", features = ["envelope"] }
+ic_auth_verifier = { version = "0.7", features = ["envelope"] }
 ```
 
 To enable the `identity` feature (It can not be compiled in canister):
 ```toml
 [dependencies]
-ic_auth_verifier = { version = "0.4", features = ["identity"] }
+ic_auth_verifier = { version = "0.7", features = ["identity"] }
 ```
 
 ## Usage

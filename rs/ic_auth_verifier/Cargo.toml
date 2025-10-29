@@ -45,3 +45,6 @@ envelope = [
 ]
 # should not include `identity` feature for canister
 identity = ["envelope", "dep:ic-agent", "dep:arc-swap", "dep:rand"]
+
+[package.metadata.docs.rs]
+all-features = true
