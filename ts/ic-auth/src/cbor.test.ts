@@ -1,8 +1,5 @@
-// (c) 2023-present, LDC Labs. All rights reserved.
-// See the file LICENSE for licensing terms.
-
-import { assert, describe, it } from 'vitest'
 import { bytesToHex } from '@noble/hashes/utils'
+import { assert, describe, it } from 'vitest'
 import { compareBytes, deterministicEncode } from './cbor.js'
 
 describe('cbor', () => {

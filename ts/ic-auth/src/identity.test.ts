@@ -1,17 +1,14 @@
-// (c) 2023-present, LDC Labs. All rights reserved.
-// See the file LICENSE for licensing terms.
-
 import { assert, describe, it } from 'vitest'
 import { deterministicEncode } from './cbor.js'
 import {
   bytesToBase64Url,
   Ed25519KeyIdentity,
-  signCborMessage,
+  signMessage,
   toDelegationIdentity
 } from './identity.js'
 
 describe('DelegationIdentity', () => {
-  it('signCborMessage', async () => {
+  it('signMessage', async () => {
     const id = Ed25519KeyIdentity.fromSecretKey(new Uint8Array(32).fill(8))
     const did = toDelegationIdentity(id)
     assert.equal(
@@ -25,7 +22,7 @@ describe('DelegationIdentity', () => {
     msg.set(-1, -1)
     msg.set(10, 10)
     msg.set(100, 100)
-    const sig = await signCborMessage(did, msg)
+    const sig = await signMessage(did, msg)
     const sig64_1 = bytesToBase64Url(deterministicEncode(sig))
     assert.equal(
       sig64_1,

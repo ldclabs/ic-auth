@@ -37,13 +37,16 @@ export async function signArbitrary(
   }
 }
 
-export async function signCborMessage(
+export function digestMessage(obj: any): Uint8Array {
+  const data = deterministicEncode(obj)
+  return sha3_256(data)
+}
+
+export async function signMessage(
   identity: DelegationIdentity,
   obj: any
 ): Promise<SignedEnvelopeCompact> {
-  const data = deterministicEncode(obj)
-  const digest = sha3_256(data)
-  return signArbitrary(identity, digest)
+  return signArbitrary(identity, digestMessage(obj))
 }
 
 export function bytesToBase64Url(bytes: Uint8Array): string {
