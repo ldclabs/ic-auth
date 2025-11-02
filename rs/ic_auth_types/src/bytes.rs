@@ -1,6 +1,6 @@
 use base64::{
     Engine,
-    prelude::{BASE64_STANDARD_NO_PAD, BASE64_URL_SAFE, BASE64_URL_SAFE_NO_PAD},
+    prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD, BASE64_URL_SAFE, BASE64_URL_SAFE_NO_PAD},
 };
 use candid::CandidType;
 use core::{
@@ -86,6 +86,11 @@ impl ByteBufB64 {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+
+    /// Encodes the contained bytes as a standard Base64 string.
+    pub fn to_base64(&self) -> String {
+        BASE64_STANDARD.encode(&self.0)
+    }
 }
 
 /// Wrapper around `[u8; N]` to serialize and deserialize efficiently.
@@ -163,6 +168,11 @@ impl<const N: usize> ByteArrayB64<N> {
     /// Returns the underlying bytes as a mutable slice.
     pub fn as_mut_slice(&mut self) -> &mut [u8] {
         &mut self.0
+    }
+
+    /// Encodes the contained bytes as a standard Base64 string.
+    pub fn to_base64(&self) -> String {
+        BASE64_STANDARD.encode(self.0)
     }
 }
 
@@ -389,6 +399,11 @@ impl<'a> BytesB64<'a> {
     /// Returns true if the contained byte slice has a length of 0.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
+    }
+
+    /// Encodes the contained bytes as a standard Base64 string.
+    pub fn to_base64(&self) -> String {
+        BASE64_STANDARD.encode(&self.0)
     }
 }
 
