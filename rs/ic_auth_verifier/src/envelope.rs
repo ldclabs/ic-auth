@@ -391,15 +391,12 @@ impl SignedEnvelope {
     /// # Returns
     /// * `Option<Self>` - The extracted envelope, or None if not found or invalid
     pub fn from_authorization(headers: &HeaderMap) -> Option<Self> {
-        if let Some(token) = headers.get(AUTHORIZATION) {
-            if let Ok(token) = token.to_str() {
-                if let Some(token) = token.strip_prefix("ICP ") {
-                    if let Ok(envelope) = Self::from_base64(token) {
+        if let Some(token) = headers.get(AUTHORIZATION)
+            && let Ok(token) = token.to_str()
+                && let Some(token) = token.strip_prefix("ICP ")
+                    && let Ok(envelope) = Self::from_base64(token) {
                         return Some(envelope);
                     }
-                }
-            }
-        }
         None
     }
 
@@ -434,9 +431,9 @@ impl SignedEnvelope {
     /// # Returns
     /// * `Option<Self>` - The extracted envelope, or None if not found or invalid
     pub fn from_headers(headers: &HeaderMap) -> Option<Self> {
-        if let Some(pubkey) = extract_data(headers, &HEADER_IC_AUTH_PUBKEY) {
-            if let Some(digest) = extract_data(headers, &HEADER_IC_AUTH_CONTENT_DIGEST) {
-                if let Some(signature) = extract_data(headers, &HEADER_IC_AUTH_SIGNATURE) {
+        if let Some(pubkey) = extract_data(headers, &HEADER_IC_AUTH_PUBKEY)
+            && let Some(digest) = extract_data(headers, &HEADER_IC_AUTH_CONTENT_DIGEST)
+                && let Some(signature) = extract_data(headers, &HEADER_IC_AUTH_SIGNATURE) {
                     let mut envelope = Self {
                         pubkey: pubkey.into(),
                         signature: signature.into(),
@@ -453,8 +450,6 @@ impl SignedEnvelope {
                         None => return Some(envelope),
                     }
                 }
-            }
-        }
 
         None
     }
@@ -592,13 +587,11 @@ pub fn verify_delegation_chain(
 /// # Returns
 /// * `Option<Vec<u8>>` - The decoded data, or None if not found or invalid
 pub fn extract_data(headers: &HeaderMap, key: &HeaderName) -> Option<Vec<u8>> {
-    if let Some(val) = headers.get(key) {
-        if let Ok(val) = val.to_str() {
-            if let Ok(data) = decode_base64(val) {
+    if let Some(val) = headers.get(key)
+        && let Ok(val) = val.to_str()
+            && let Ok(data) = decode_base64(val) {
                 return Some(data);
             }
-        }
-    }
     None
 }
 

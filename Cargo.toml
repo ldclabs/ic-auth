@@ -1,5 +1,9 @@
 [workspace]
-members = ["rs/ic_auth_types", "rs/ic_auth_verifier"]
+members = [
+  "rs/ic_auth_types",
+  "rs/ic_auth_verifier",
+  "rs/ic_auth_verify_server",
+]
 resolver = "2"
 
 [workspace.package]

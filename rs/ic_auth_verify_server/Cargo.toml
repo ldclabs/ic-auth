@@ -1,0 +1,39 @@
+[package]
+name = "ic_auth_verify_server"
+description = "IC Auth Verifier Server"
+repository = "https://github.com/ldclabs/ic-auth/tree/main/rs/ic_auth_verify_server"
+publish = false
+version.workspace = true
+edition.workspace = true
+keywords.workspace = true
+categories.workspace = true
+license.workspace = true
+
+[dependencies]
+ic_auth_types = { path = "../ic_auth_types", version = "0.7" }
+ic_auth_verifier = { path = "../ic_auth_verifier", version = "0.7", features = [
+  "full",
+] }
+axum-core = "0.5"
+axum = { version = "0.8", features = [
+  "http1",
+  "http2",
+  "json",
+  # "macros",
+  "matched-path",
+  "tokio",
+  "query",
+], default-features = true }
+bytes = "1.11"
+candid = { workspace = true }
+ciborium = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+http = { workspace = true }
+mime = "0.3"
+tokio-util = "0.7"
+tokio = { version = "1", features = ["full"] }
+structured-logger = "1"
+log = { version = "0.4", features = ["kv_serde"] }
+
+[dev-dependencies]
