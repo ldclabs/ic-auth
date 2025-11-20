@@ -9,9 +9,11 @@ use http::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 
-pub static CONTENT_TYPE_Cbor: &str = "application/cbor";
-pub static CONTENT_TYPE_Json: &str = "application/json";
+pub static CONTENT_TYPE_CBOR: &str = "application/cbor";
+pub static CONTENT_TYPE_JSON: &str = "application/json";
 pub static CONTENT_TYPE_TEXT: &str = "text/plain";
+
+#[derive(Debug)]
 pub enum Content<T> {
     Json(T, Option<StatusCode>),
     Cbor(T, Option<StatusCode>),
@@ -28,10 +30,10 @@ impl Content<()> {
         if let Some(accept) = headers.get(header::ACCEPT)
             && let Ok(accept) = accept.to_str()
         {
-            if accept.contains(CONTENT_TYPE_Cbor) {
+            if accept.contains(CONTENT_TYPE_CBOR) {
                 return Content::Cbor((), None);
             }
-            if accept.contains(CONTENT_TYPE_Json) {
+            if accept.contains(CONTENT_TYPE_JSON) {
                 return Content::Json((), None);
             }
             if accept.contains(CONTENT_TYPE_TEXT) {
@@ -106,7 +108,7 @@ where
                     c.unwrap_or_default(),
                     [(
                         header::CONTENT_TYPE,
-                        HeaderValue::from_static(CONTENT_TYPE_Json),
+                        HeaderValue::from_static(CONTENT_TYPE_JSON),
                     )],
                     buf.into_inner().freeze(),
                 )
@@ -126,7 +128,7 @@ where
                     c.unwrap_or_default(),
                     [(
                         header::CONTENT_TYPE,
-                        HeaderValue::from_static(CONTENT_TYPE_Cbor),
+                        HeaderValue::from_static(CONTENT_TYPE_CBOR),
                     )],
                     buf.into_inner().freeze(),
                 )

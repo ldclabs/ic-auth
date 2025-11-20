@@ -1,6 +1,7 @@
 use axum::{BoxError, Router, http::StatusCode, response::IntoResponse, routing};
 use candid::Principal;
 use ciborium::from_reader;
+use http::HeaderMap;
 use ic_auth_types::{ByteArrayB64, ByteBufB64};
 use ic_auth_verifier::SignedEnvelope;
 use serde::{Deserialize, Serialize};
@@ -99,14 +100,14 @@ pub async fn create_reuse_port_listener(
     Ok(listener)
 }
 
-async fn get_information(ct: Content<()>) -> impl IntoResponse {
+async fn get_information(headers: HeaderMap) -> impl IntoResponse {
     let info = InfoOutput {
         name: APP_NAME,
         version: APP_VERSION,
     };
-    match ct {
-        Content::Json(_, _) => Content::Json(info, None),
-        Content::Cbor(_, _) => Content::Cbor(info, None),
+    match Content::from(&headers) {
+        Content::Json((), _) => Content::Json(info, None),
+        Content::Cbor((), _) => Content::Cbor(info, None),
         _ => Content::Text(
             "supported content types: application/json, application/cbor".into(),
             Some(StatusCode::NOT_ACCEPTABLE),
