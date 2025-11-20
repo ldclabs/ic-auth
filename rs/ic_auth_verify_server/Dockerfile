@@ -6,7 +6,7 @@ RUN apt-get update \
 
 WORKDIR /build
 COPY rs ./rs
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml ./
 RUN cargo build --release -p ic_auth_verify_server
 
 FROM debian:bookworm-slim AS runtime
