@@ -23,5 +23,6 @@ WORKDIR /app
 # your custom setup goes here
 COPY --from=builder /build/target/release/ic_auth_verify_server ./ic_auth_verify_server
 
+EXPOSE 8080
 # entry point
 ENTRYPOINT [ "/app/ic_auth_verify_server" ]
