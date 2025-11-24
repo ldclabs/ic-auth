@@ -14,10 +14,10 @@ importers:
     devDependencies:
       '@dfinity/agent':
         specifier: '>=3.2.0'
-        version: 3.2.4(@dfinity/candid@3.4.1(@dfinity/principal@3.2.4))(@dfinity/principal@3.2.4)(@noble/hashes@1.8.0)
+        version: 3.2.4(@dfinity/principal@3.2.4)(@noble/hashes@1.8.0)
       '@dfinity/identity':
         specifier: '>=3.2.0'
-        version: 3.4.1(@dfinity/agent@3.2.4(@dfinity/candid@3.4.1(@dfinity/principal@3.2.4))(@dfinity/principal@3.2.4)(@noble/hashes@1.8.0))(@dfinity/candid@3.4.1(@dfinity/principal@3.2.4))(@dfinity/principal@3.2.4)(@noble/curves@1.9.7)(@noble/hashes@1.8.0)
+        version: 3.4.1(@dfinity/agent@3.2.4(@dfinity/principal@3.2.4)(@noble/hashes@1.8.0))(@dfinity/principal@3.2.4)(@noble/curves@1.9.7)(@noble/hashes@1.8.0)
       '@dfinity/principal':
         specifier: '>=3.2.0'
         version: 3.2.4
@@ -37,8 +37,8 @@ importers:
         specifier: ^8.42.0
         version: 8.42.0(eslint@9.34.0)(typescript@5.9.2)
       cborg:
-        specifier: '>=4.2.0'
-        version: 4.2.18
+        specifier: ^4.3.1
+        version: 4.3.1
       eslint:
         specifier: ^9.34.0
         version: 9.34.0
@@ -626,8 +626,8 @@ packages:
     resolution: {integrity: sha512-P8BjAsXvZS+VIDUI11hHCQEv74YT67YUi5JJFNWIqL235sBmjX4+qx9Muvls5ivyNENctx46xQLQ3aTuE7ssaQ==}
     engines: {node: '>=6'}
 
-  cborg@4.2.18:
-    resolution: {integrity: sha512-uzhkd5HOaLccokqeZa5B0Qz7/aa9C12pmUq5yU3vcy6I6OhTKdPHSzOuBPZfcoQHdcx8Emz/dWZbPNNfF/puvg==}
+  cborg@4.3.1:
+    resolution: {integrity: sha512-zLyEPKHqdX08yiyMzm3A/QdurLDB1XVGB3RWJa8PykCXNpLxhlyWToM4g+0Vo+6Q6txrdvAOfdC0ZBaxG0qw2g==}
     hasBin: true
 
   chai@5.2.0:
@@ -1598,9 +1598,8 @@ packages:
 
 snapshots:
 
-  '@dfinity/agent@3.2.4(@dfinity/candid@3.4.1(@dfinity/principal@3.2.4))(@dfinity/principal@3.2.4)(@noble/hashes@1.8.0)':
+  '@dfinity/agent@3.2.4(@dfinity/principal@3.2.4)(@noble/hashes@1.8.0)':
     dependencies:
-      '@dfinity/candid': 3.4.1(@dfinity/principal@3.2.4)
       '@dfinity/cbor': 0.2.2
       '@dfinity/principal': 3.2.4
       '@noble/curves': 1.9.7
@@ -1612,10 +1611,9 @@ snapshots:
 
   '@dfinity/cbor@0.2.2': {}
 
-  '@dfinity/identity@3.4.1(@dfinity/agent@3.2.4(@dfinity/candid@3.4.1(@dfinity/principal@3.2.4))(@dfinity/principal@3.2.4)(@noble/hashes@1.8.0))(@dfinity/candid@3.4.1(@dfinity/principal@3.2.4))(@dfinity/principal@3.2.4)(@noble/curves@1.9.7)(@noble/hashes@1.8.0)':
+  '@dfinity/identity@3.4.1(@dfinity/agent@3.2.4(@dfinity/principal@3.2.4)(@noble/hashes@1.8.0))(@dfinity/principal@3.2.4)(@noble/curves@1.9.7)(@noble/hashes@1.8.0)':
     dependencies:
-      '@dfinity/agent': 3.2.4(@dfinity/candid@3.4.1(@dfinity/principal@3.2.4))(@dfinity/principal@3.2.4)(@noble/hashes@1.8.0)
-      '@dfinity/candid': 3.4.1(@dfinity/principal@3.2.4)
+      '@dfinity/agent': 3.2.4(@dfinity/principal@3.2.4)(@noble/hashes@1.8.0)
       '@dfinity/principal': 3.2.4
       '@noble/curves': 1.9.7
       '@noble/hashes': 1.8.0
@@ -2109,7 +2107,7 @@ snapshots:
 
   callsites@3.1.0: {}
 
-  cborg@4.2.18: {}
+  cborg@4.3.1: {}
 
   chai@5.2.0:
     dependencies:

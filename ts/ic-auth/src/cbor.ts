@@ -1,11 +1,6 @@
-import { encode, Token } from 'cborg'
+import { encode, rfc8949EncodeOptions } from 'cborg'
 
-export { decode, encode } from 'cborg'
-
-export const rfc8949EncodeOptions = Object.freeze({
-  float64: true,
-  mapSorter: rfc8949MapSorter
-})
+export { decode, encode, rfc8949EncodeOptions } from 'cborg'
 
 // RFC 8949 Deterministic Encoding: The keys in every map MUST be sorted in the bytewise lexicographic order of their deterministic encodings.
 export function deterministicEncode(data: any): Uint8Array {
@@ -33,28 +28,4 @@ export function compareBytes(a: Uint8Array, b: Uint8Array): number {
   }
 
   throw new Error('ic-auth: compareBytes: invalid arguments')
-}
-
-type TokenEx = Token & { _keyBytes?: Uint8Array }
-
-function rfc8949MapSorter(
-  e1: (Token | Token[])[],
-  e2: (Token | Token[])[]
-): number {
-  if (e1[0] instanceof Token && e2[0] instanceof Token) {
-    const t1 = e1[0] as TokenEx
-    const t2 = e2[0] as TokenEx
-
-    // different key types
-    if (!t1._keyBytes) {
-      t1._keyBytes = deterministicEncode(t1.value)
-    }
-
-    if (!t2._keyBytes) {
-      t2._keyBytes = deterministicEncode(t2.value)
-    }
-
-    return compareBytes(t1._keyBytes, t2._keyBytes)
-  }
-  throw new Error('rfc8949MapSorter: complex key types are not supported yet')
 }

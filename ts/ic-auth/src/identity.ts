@@ -4,6 +4,8 @@ import { sha3_256 } from '@noble/hashes/sha3'
 import { deterministicEncode } from './cbor.js'
 import { SignedEnvelopeCompact, toSignedDelegationCompact } from './types.js'
 
+export { sha3_256 } from '@noble/hashes/sha3'
+
 export {
   DelegationIdentity,
   Ed25519KeyIdentity,
@@ -49,16 +51,36 @@ export async function signMessage(
   return signArbitrary(identity, digestMessage(obj))
 }
 
+export function toBase64(bytes: Uint8Array): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(bytes).toString('base64')
+  }
+  let result = ''
+  const chunk = 0x8000
+  for (let i = 0; i < bytes.length; i += chunk) {
+    result += String.fromCharCode(...bytes.subarray(i, i + chunk))
+  }
+  return btoa(result)
+}
+
+export function fromBase64(str: string): Uint8Array {
+  if (typeof Buffer !== 'undefined') {
+    return new Uint8Array(Buffer.from(str, 'base64'))
+  }
+  const binary = atob(str)
+  const out = new Uint8Array(binary.length)
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i)
+  return out
+}
+
 export function bytesToBase64Url(bytes: Uint8Array): string {
-  return btoa(String.fromCodePoint(...bytes))
+  return toBase64(bytes)
     .replaceAll('+', '-')
     .replaceAll('/', '_')
     .replaceAll('=', '')
 }
 
 export function base64ToBytes(str: string): Uint8Array {
-  return Uint8Array.from(
-    atob(str.replaceAll('-', '+').replaceAll('_', '/')),
-    (m) => m.codePointAt(0)!
-  )
+  const padded = str.replaceAll('-', '+').replaceAll('_', '/')
+  return fromBase64(padded)
 }
