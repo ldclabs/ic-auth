@@ -11,11 +11,15 @@ export function toDelegation(obj: Delegation | DelegationCompact): Delegation {
     return obj
   }
 
-  return {
+  const val: Delegation = {
     pubkey: obj.p,
-    expiration: obj.e,
-    targets: obj.t
+    expiration: obj.e
   }
+  if (obj.t) {
+    val.targets = obj.t
+  }
+
+  return val
 }
 
 export interface DelegationCompact {
@@ -31,11 +35,15 @@ export function toDelegationCompact(
     return obj
   }
 
-  return {
+  const val: DelegationCompact = {
     p: obj.pubkey,
-    e: obj.expiration,
-    t: obj.targets
+    e: obj.expiration
   }
+  if (obj.targets) {
+    val.t = obj.targets
+  }
+
+  return val
 }
 
 export interface SignedDelegation {
@@ -204,10 +212,16 @@ export function toSignedEnvelopeCompact(
     return obj
   }
 
-  return {
+  const val: SignedEnvelopeCompact = {
     p: obj.pubkey || (obj as any).public_key,
-    s: obj.signature,
-    h: obj.digest,
-    d: obj.delegation?.map(toSignedDelegationCompact)
+    s: obj.signature
   }
+  if (obj.digest) {
+    val.h = obj.digest
+  }
+  if (obj.delegation) {
+    val.d = obj.delegation.map(toSignedDelegationCompact)
+  }
+
+  return val
 }

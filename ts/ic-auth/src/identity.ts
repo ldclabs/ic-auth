@@ -31,12 +31,16 @@ export async function signArbitrary(
   const delegations = identity
     .getDelegation()
     .delegations.map(toSignedDelegationCompact)
-  return {
+  const val: SignedEnvelopeCompact = {
     p: identity.getPublicKey().toDer(),
     s: new Uint8Array(sig),
-    d: delegations.length > 0 ? delegations : undefined,
     h: data
   }
+  if (delegations.length > 0) {
+    val.d = delegations
+  }
+
+  return val
 }
 
 export function digestMessage(obj: any): Uint8Array {
