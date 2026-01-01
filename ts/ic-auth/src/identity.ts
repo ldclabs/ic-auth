@@ -56,6 +56,9 @@ export async function signMessage(
 }
 
 export function toBase64(bytes: Uint8Array): string {
+  if (typeof (bytes as any).toBase64 === 'function') {
+    return (bytes as any).toBase64()
+  }
   if (typeof Buffer !== 'undefined') {
     return Buffer.from(bytes).toString('base64')
   }
@@ -64,14 +67,20 @@ export function toBase64(bytes: Uint8Array): string {
   for (let i = 0; i < bytes.length; i += chunk) {
     result += String.fromCharCode(...bytes.subarray(i, i + chunk))
   }
-  return btoa(result)
+  return globalThis.btoa(result)
 }
 
 export function fromBase64(str: string): Uint8Array {
+  if (typeof (Uint8Array as any).fromBase64 === 'function') {
+    if (str.includes('-') || str.includes('_')) {
+      return (Uint8Array as any).fromBase64(str, { alphabet: 'base64url' })
+    }
+    return (Uint8Array as any).fromBase64(str)
+  }
   if (typeof Buffer !== 'undefined') {
     return new Uint8Array(Buffer.from(str, 'base64'))
   }
-  const binary = atob(str)
+  const binary = globalThis.atob(str)
   const out = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i)
   return out
