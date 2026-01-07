@@ -40,7 +40,7 @@ pub use serde_bytes::{ByteArray, ByteBuf, Bytes};
 /// let parsed: Example = serde_json::from_str(&json).unwrap();
 /// assert_eq!(parsed.data.as_ref(), &[1, 2, 3, 4]);
 /// ```
-#[derive(CandidType, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(CandidType, Default, Clone, Eq, Ord)]
 pub struct ByteBufB64(pub Vec<u8>);
 
 impl ByteBufB64 {
@@ -120,7 +120,7 @@ impl ByteBufB64 {
 /// let parsed: Example = serde_json::from_str(&json).unwrap();
 /// assert_eq!(parsed.data.as_ref(), &[1, 2, 3, 4]);
 /// ```
-#[derive(CandidType, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(CandidType, Clone, Eq, Ord)]
 pub struct ByteArrayB64<const N: usize>(pub [u8; N]);
 
 impl<const N: usize> ByteArrayB64<N> {
@@ -361,6 +361,108 @@ impl<const N: usize> TryFrom<&str> for ByteArrayB64<N> {
     }
 }
 
+impl<Rhs> PartialEq<Rhs> for ByteBufB64
+where
+    Rhs: ?Sized + AsRef<[u8]>,
+{
+    fn eq(&self, other: &Rhs) -> bool {
+        self.as_ref().eq(other.as_ref())
+    }
+}
+
+impl<const N: usize, Rhs> PartialEq<Rhs> for ByteArrayB64<N>
+where
+    Rhs: ?Sized + AsRef<[u8; N]>,
+{
+    fn eq(&self, other: &Rhs) -> bool {
+        self.as_ref().eq(other.as_ref())
+    }
+}
+
+impl<Rhs> PartialOrd<Rhs> for ByteBufB64
+where
+    Rhs: ?Sized + AsRef<[u8]>,
+{
+    fn partial_cmp(&self, other: &Rhs) -> Option<core::cmp::Ordering> {
+        self.as_ref().partial_cmp(other.as_ref())
+    }
+}
+
+impl<const N: usize, Rhs> PartialOrd<Rhs> for ByteArrayB64<N>
+where
+    Rhs: ?Sized + AsRef<[u8; N]>,
+{
+    fn partial_cmp(&self, other: &Rhs) -> Option<core::cmp::Ordering> {
+        self.as_ref().partial_cmp(other.as_ref())
+    }
+}
+
+impl core::hash::Hash for ByteBufB64 {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl<const N: usize> core::hash::Hash for ByteArrayB64<N> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
+
+impl IntoIterator for ByteBufB64 {
+    type Item = u8;
+    type IntoIter = <Vec<u8> as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a ByteBufB64 {
+    type Item = &'a u8;
+    type IntoIter = <&'a [u8] as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut ByteBufB64 {
+    type Item = &'a mut u8;
+    type IntoIter = <&'a mut [u8] as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
+impl<const N: usize> IntoIterator for ByteArrayB64<N> {
+    type Item = u8;
+    type IntoIter = <[u8; N] as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_iter()
+    }
+}
+
+impl<'a, const N: usize> IntoIterator for &'a ByteArrayB64<N> {
+    type Item = &'a u8;
+    type IntoIter = <&'a [u8; N] as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl<'a, const N: usize> IntoIterator for &'a mut ByteArrayB64<N> {
+    type Item = &'a mut u8;
+    type IntoIter = <&'a mut [u8; N] as IntoIterator>::IntoIter;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
 /// Wrapper around borrowed/owned byte slice to serialize and deserialize efficiently.
 /// If the serialization format is human readable (formats like JSON and YAML), it will be encoded in Base64URL.
 /// Otherwise, it will be serialized as a byte array.
@@ -554,9 +656,9 @@ impl<const N: usize> serde::Serialize for ByteArrayB64<N> {
 impl<'de> serde::Deserialize<'de> for ByteBufB64 {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         if deserializer.is_human_readable() {
-            deserializer.deserialize_str(deserialize::ByteBufB64Visitor)
+            deserializer.deserialize_any(deserialize::ByteBufB64Visitor)
         } else {
-            deserializer.deserialize_bytes(deserialize::ByteBufB64Visitor)
+            deserializer.deserialize_byte_buf(deserialize::ByteBufB64Visitor)
         }
     }
 }
@@ -566,9 +668,9 @@ impl<'de> serde::Deserialize<'de> for ByteBufB64 {
 impl<'de, const N: usize> serde::Deserialize<'de> for ByteArrayB64<N> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         if deserializer.is_human_readable() {
-            deserializer.deserialize_str(deserialize::ByteArrayB64Visitor)
+            deserializer.deserialize_any(deserialize::ByteArrayB64Visitor)
         } else {
-            deserializer.deserialize_bytes(deserialize::ByteArrayB64Visitor)
+            deserializer.deserialize_byte_buf(deserialize::ByteArrayB64Visitor)
         }
     }
 }
@@ -595,6 +697,13 @@ mod deserialize {
             E: serde::de::Error,
         {
             ByteBufB64::from_str(v).map_err(E::custom)
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            ByteBufB64::from_str(&v).map_err(E::custom)
         }
 
         /// Deserializes a byte slice into a `ByteBufB64`.
@@ -647,6 +756,13 @@ mod deserialize {
             ByteArrayB64::from_str(v).map_err(E::custom)
         }
 
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            ByteArrayB64::from_str(&v).map_err(E::custom)
+        }
+
         /// Deserializes a byte slice into a `ByteArrayB64<N>`.
         fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
         where
@@ -658,6 +774,18 @@ mod deserialize {
             let mut bytes = [0u8; N];
             bytes.copy_from_slice(v);
             Ok(ByteArrayB64(bytes))
+        }
+
+        /// Deserializes a byte vector into a `ByteBufB64`.
+        fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            if v.len() != N {
+                return Err(E::invalid_length(v.len(), &self));
+            }
+
+            Ok(ByteArrayB64(v.try_into().unwrap()))
         }
 
         /// Deserializes a sequence of bytes into a `ByteArrayB64<N>`.
