@@ -1,5 +1,5 @@
-import { SignIdentity } from '@dfinity/agent'
-import { DelegationChain, DelegationIdentity } from '@dfinity/identity'
+import { SignIdentity } from '@icp-sdk/core/agent'
+import { DelegationChain, DelegationIdentity } from '@icp-sdk/core/identity'
 import { sha3_256 } from '@noble/hashes/sha3'
 import { deterministicEncode } from './cbor.js'
 import { SignedEnvelopeCompact, toSignedDelegationCompact } from './types.js'
@@ -10,7 +10,7 @@ export {
   DelegationIdentity,
   Ed25519KeyIdentity,
   Ed25519PublicKey
-} from '@dfinity/identity'
+} from '@icp-sdk/core/identity'
 
 export function toDelegationIdentity(
   identity: SignIdentity
