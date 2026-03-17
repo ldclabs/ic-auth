@@ -9,11 +9,17 @@ pub mod envelope;
 #[cfg(feature = "envelope")]
 pub mod deeplink;
 
+#[cfg(feature = "envelope")]
+mod ic_signature_verification;
+
 #[cfg(feature = "identity")]
 pub mod identity;
 
 pub use asn1::*;
 pub use ic_canister_sig_creation::CanisterSigPublicKey;
+
+#[cfg(feature = "envelope")]
+pub use ic_signature_verification::*;
 
 #[cfg(feature = "envelope")]
 pub use envelope::*;

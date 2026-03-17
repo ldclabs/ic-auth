@@ -10,8 +10,8 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-ic_auth_types = { path = "../ic_auth_types", version = "0.7" }
-ic_auth_verifier = { path = "../ic_auth_verifier", version = "0.7", features = [
+ic_auth_types = { path = "../ic_auth_types", version = "0.8" }
+ic_auth_verifier = { path = "../ic_auth_verifier", version = "0.8", features = [
   "full",
 ] }
 axum-core = "0.5"
