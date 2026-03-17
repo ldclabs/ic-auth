@@ -118,6 +118,7 @@ pub fn verify_sig_with_rootkey(
             public_key,
             ic_root_public_key_raw,
             current_time_ns,
+            None,
         ),
         _ => verify_basic_sig(alg, &pk, msg, signature),
     }

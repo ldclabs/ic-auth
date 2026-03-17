@@ -6,7 +6,7 @@ use serde_bytes::ByteBuf;
 use sha2::{Digest, Sha256};
 
 pub const IC_STATE_ROOT_DOMAIN_SEPARATOR: &[u8; 14] = b"\x0Dic-state-root";
-pub const MAX_CERT_TIME_OFFSET_NS: u128 = 300_000_000_000; // 5 min
+pub const MAX_CERT_TIME_OFFSET_NS: u128 = 47 * 24 * 3600 * 1_000_000_000; // 47 days
 
 use ic_canister_sig_creation::CanisterSigPublicKey;
 
@@ -18,6 +18,7 @@ pub fn verify_canister_sig(
     public_key_der: &[u8],
     ic_root_public_key_raw: &[u8],
     current_time_ns: &u128,
+    allowed_certificate_time_offset_ns: Option<u128>,
 ) -> Result<(), String> {
     let signature = parse_signature_cbor(signature_cbor)?;
     let public_key = CanisterSigPublicKey::try_from(public_key_der)
@@ -31,7 +32,7 @@ pub fn verify_canister_sig(
             public_key.canister_id.as_slice(),
             ic_root_public_key_raw,
             current_time_ns,
-            &MAX_CERT_TIME_OFFSET_NS,
+            &allowed_certificate_time_offset_ns.unwrap_or(MAX_CERT_TIME_OFFSET_NS),
         )
         .map_err(|err| format!("{err:?}"))?;
     Ok(())
