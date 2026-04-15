@@ -29,19 +29,7 @@ pub const ANONYMOUS_PRINCIPAL: Principal = Principal::anonymous();
 /// This prevents replay attacks while allowing for reasonable clock differences.
 pub const PERMITTED_DRIFT_MS: u64 = 300 * 1000;
 
-/// The IC root public key used when verifying canister signatures.
-/// This is the official Internet Computer root public key used to verify the authenticity
-/// of canister signatures across the IC network.
-/// For more information, see:
-/// https://internetcomputer.org/docs/current/developer-docs/web-apps/obtain-verify-ic-pubkey
-// pub const IC_ROOT_PUBLIC_KEY_RAW: &[u8; 96] = &[
-//     129, 76, 14, 110, 199, 31, 171, 88, 59, 8, 189, 129, 55, 60, 37, 92, 60, 55, 27, 46, 132, 134,
-//     60, 152, 164, 241, 224, 139, 116, 35, 93, 20, 251, 93, 156, 12, 213, 70, 217, 104, 95, 145, 58,
-//     12, 11, 44, 197, 52, 21, 131, 191, 75, 67, 146, 228, 103, 219, 150, 214, 91, 155, 180, 203,
-//     113, 113, 18, 248, 71, 46, 13, 90, 77, 20, 80, 95, 253, 116, 132, 176, 18, 145, 9, 28, 95, 135,
-//     185, 136, 131, 70, 63, 152, 9, 26, 11, 170, 174,
-// ];
-
+/// Domain separator for delegation signature messages.
 pub const IC_REQUEST_AUTH_DELEGATION_DOMAIN_SEPARATOR: &[u8] = b"\x1Aic-request-auth-delegation";
 
 /// HTTP header for the caller's public key used in authentication.

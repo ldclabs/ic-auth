@@ -94,7 +94,7 @@ pub fn keccak256(data: &[u8]) -> [u8; 32] {
 
 #[cfg(feature = "identity")]
 pub fn rand_bytes<const N: usize>() -> [u8; N] {
-    use rand::RngCore;
+    use rand::Rng;
 
     let mut rng = rand::rng();
     let mut bytes = [0u8; N];
@@ -109,7 +109,7 @@ mod tests {
         Identity,
         identity::{BasicIdentity, Prime256v1Identity, Secp256k1Identity},
     };
-    use rand::{RngCore, rng};
+    use rand::{Rng, rng};
 
     const MESSAGE: &[u8] = b"some message";
 
