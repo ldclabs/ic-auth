@@ -114,7 +114,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_delegation_formart() {
+    fn test_delegation_format() {
         let d = Delegation {
             pubkey: ByteBufB64(vec![1, 2, 3, 4]),
             expiration: 99,

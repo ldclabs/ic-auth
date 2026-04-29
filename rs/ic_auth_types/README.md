@@ -11,7 +11,7 @@
 
 ## Features
 
-- **Efficient Byte Handling**: Includes `ByteBufB64` and `ByteArrayB64` types for efficient serialization and deserialization of binary data with automatic Base64URL encoding for human-readable formats.
+- **Efficient Byte Handling**: Includes `ByteBufB64`, `ByteArrayB64`, and `BytesB64` types for efficient serialization and deserialization of binary data with automatic Base64URL encoding for human-readable formats.
 - **Unique Identifiers**: Provides `Xid` type, a compact and lexicographically sortable globally unique identifier (12 bytes vs UUID's 16 bytes).
 - **Authentication Primitives**: Includes types for delegations, signed delegations, and authentication responses.
 - **Candid Compatibility**: All types implement `CandidType` for seamless integration with the Internet Computer.
@@ -23,13 +23,13 @@
 Add this to your `Cargo.toml`:
 ```toml
 [dependencies]
-ic_auth_types = "0.7"
+ic_auth_types = "0.8"
 ```
 
 Enables interoperability with the original `xid` crate:
 ```toml
 [dependencies]
-ic_auth_types = { version = "0.7", features = ["xid"] }
+ic_auth_types = { version = "0.8", features = ["xid"] }
 ```
 
 ## Related Crates

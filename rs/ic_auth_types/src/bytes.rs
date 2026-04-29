@@ -469,7 +469,7 @@ impl<'a, const N: usize> IntoIterator for &'a mut ByteArrayB64<N> {
 ///
 /// This type mirrors serde_bytes::Bytes (borrow or own) while following the Base64URL
 /// behavior consistent with ByteBufB64 in human-readable formats.
-#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(CandidType, Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct BytesB64<'a>(pub Cow<'a, [u8]>);
 
 impl<'a> BytesB64<'a> {
@@ -627,6 +627,19 @@ impl<'a> serde::Serialize for BytesB64<'a> {
     }
 }
 
+/// Implements `serde::Deserialize` for `BytesB64`.
+/// Handles both Base64URL encoded strings (for human-readable formats) and raw bytes (for binary formats).
+impl<'de, 'a> serde::Deserialize<'de> for BytesB64<'a> {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let visitor = deserialize::BytesB64Visitor(core::marker::PhantomData);
+        if deserializer.is_human_readable() {
+            deserializer.deserialize_any(visitor)
+        } else {
+            deserializer.deserialize_byte_buf(visitor)
+        }
+    }
+}
+
 /// Implements `serde::Serialize` for `ByteBufB64`.
 /// Uses Base64URL encoding for human-readable formats and raw bytes for binary formats.
 impl serde::Serialize for ByteBufB64 {
@@ -677,9 +690,10 @@ impl<'de, const N: usize> serde::Deserialize<'de> for ByteArrayB64<N> {
 
 /// Module containing visitor implementations for deserialization.
 mod deserialize {
-    use super::{ByteArrayB64, ByteBufB64};
-    use core::str::FromStr;
+    use super::{ByteArrayB64, ByteBufB64, BytesB64};
+    use core::{marker::PhantomData, str::FromStr};
     use serde::de::Error;
+    use std::borrow::Cow;
 
     /// Visitor for deserializing `ByteBufB64` from various formats.
     pub(super) struct ByteBufB64Visitor;
@@ -735,6 +749,59 @@ mod deserialize {
             }
 
             Ok(ByteBufB64(bytes))
+        }
+    }
+
+    /// Visitor for deserializing `BytesB64` from various formats.
+    pub(super) struct BytesB64Visitor<'a>(pub(super) PhantomData<&'a ()>);
+
+    impl<'de, 'a> serde::de::Visitor<'de> for BytesB64Visitor<'a> {
+        type Value = BytesB64<'a>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("bytes or string")
+        }
+
+        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            BytesB64::from_str(v).map_err(E::custom)
+        }
+
+        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            BytesB64::from_str(&v).map_err(E::custom)
+        }
+
+        fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(BytesB64(Cow::Owned(v.to_vec())))
+        }
+
+        fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(BytesB64(Cow::Owned(v)))
+        }
+
+        fn visit_seq<V>(self, mut v: V) -> Result<Self::Value, V::Error>
+        where
+            V: serde::de::SeqAccess<'de>,
+        {
+            let len = core::cmp::min(v.size_hint().unwrap_or(0), 4096);
+            let mut bytes = Vec::with_capacity(len);
+
+            while let Some(b) = v.next_element()? {
+                bytes.push(b);
+            }
+
+            Ok(BytesB64(Cow::Owned(bytes)))
         }
     }
 
@@ -858,6 +925,7 @@ mod tests {
         assert_eq!(a, encode_one(ByteBuf::from(vec![1, 2, 3, 4])).unwrap());
         assert_eq!(a, encode_one(ByteBufB64::from(vec![1, 2, 3, 4])).unwrap());
         assert_eq!(a, encode_one(ByteArrayB64::from([1, 2, 3, 4])).unwrap());
+        assert_eq!(a, encode_one(BytesB64::from_vec(vec![1, 2, 3, 4])).unwrap());
     }
 
     #[test]
@@ -944,5 +1012,27 @@ mod tests {
 
         assert_eq!(b_std.as_ref(), data.as_slice());
         assert_eq!(b_url.as_ref(), data.as_slice());
+    }
+
+    #[test]
+    fn test_bytesb64_serde_roundtrip() {
+        #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+        struct S {
+            d: BytesB64<'static>,
+        }
+
+        let value = S {
+            d: BytesB64::from_vec(vec![251, 255, 239]),
+        };
+
+        let json = serde_json::to_string(&value).unwrap();
+        assert_eq!(json, r#"{"d":"-__v"}"#);
+        let parsed: S = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, value);
+
+        let mut data = Vec::new();
+        ciborium::into_writer(&value, &mut data).unwrap();
+        let parsed: S = ciborium::from_reader(&data[..]).unwrap();
+        assert_eq!(parsed, value);
     }
 }

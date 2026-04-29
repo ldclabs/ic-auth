@@ -2,7 +2,7 @@
 name = "ic_auth_types"
 description = "A Rust types library used for integrating with IC-Auth."
 publish = true
-repository = "https://github.com/ldclabs/ic-auth/tree/main/src/ic_auth_types"
+repository = "https://github.com/ldclabs/ic-auth/tree/main/rs/ic_auth_types"
 version.workspace = true
 edition.workspace = true
 keywords.workspace = true

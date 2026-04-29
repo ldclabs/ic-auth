@@ -8,13 +8,13 @@ use std::io::Write;
 /// Serializes an object as CBOR into a new Vec<u8>
 pub fn cbor_into_vec<T: ?Sized + ser::Serialize>(value: &T) -> Result<Vec<u8>, String> {
     let mut data = Vec::new();
-    ciborium::into_writer(&value, &mut data).map_err(|err| format!("{err:?}"))?;
+    ciborium::into_writer(value, &mut data).map_err(|err| format!("{err:?}"))?;
     Ok(data)
 }
 
 /// Serializes an object as CBOR into a writer
 pub fn cbor_into<T: ?Sized + ser::Serialize, W: Write>(value: &T, w: W) -> Result<(), String> {
-    ciborium::into_writer(&value, w).map_err(|err| format!("{err:?}"))?;
+    ciborium::into_writer(value, w).map_err(|err| format!("{err:?}"))?;
     Ok(())
 }
 

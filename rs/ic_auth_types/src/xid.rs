@@ -43,7 +43,7 @@ impl From<Xid> for xid::Id {
 #[cfg(feature = "xid")]
 impl From<xid::Id> for Xid {
     fn from(id: xid::Id) -> Self {
-        Self(id.0.into())
+        Self(id.0)
     }
 }
 
@@ -314,6 +314,10 @@ mod deserialize {
                     .ok_or_else(|| V::Error::invalid_length(idx, &self))?;
             }
 
+            if let Some(_extra) = seq.next_element::<serde::de::IgnoredAny>()? {
+                return Err(V::Error::invalid_length(RAW_LEN + 1, &self));
+            }
+
             Ok(Xid(bytes))
         }
     }
@@ -390,5 +394,19 @@ mod tests {
         );
         let t1: Test = ciborium::from_reader(&data[..]).unwrap();
         assert_eq!(t, t1);
+    }
+
+    #[test]
+    fn test_xid_rejects_extra_sequence_bytes() {
+        use serde::Deserializer as _;
+        use serde::de::value::{Error as ValueError, SeqDeserializer};
+
+        let bytes = vec![0u8; RAW_LEN + 1];
+        let deserializer = SeqDeserializer::<_, ValueError>::new(bytes.into_iter());
+        let err = deserializer
+            .deserialize_seq(deserialize::XidVisitor)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("invalid length 13"));
     }
 }
