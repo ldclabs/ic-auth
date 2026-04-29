@@ -27,25 +27,27 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-ic_auth_verifier = "0.7"  # Replace with the latest version
+ic_auth_verifier = "0.8"
 ```
 
 To enable the `envelope` feature:
 
 ```toml
 [dependencies]
-ic_auth_verifier = { version = "0.7", features = ["envelope"] }
+ic_auth_verifier = { version = "0.8", features = ["envelope"] }
 ```
 
 To enable the `identity` feature (It can not be compiled in canister):
 ```toml
 [dependencies]
-ic_auth_verifier = { version = "0.7", features = ["identity"] }
+ic_auth_verifier = { version = "0.8", features = ["identity"] }
 ```
 
 ## Usage
 
-### Basic Signing
+### Envelope Signing
+
+Requires the `identity` feature.
 
 ```rust
 use ic_auth_verifier::SignedEnvelope;
@@ -60,14 +62,21 @@ envelope.to_authorization(&mut headers)?;
 // envelope.to_headers(&mut headers)?;
 ```
 
-### Basic Verification
+### Envelope Verification
+
+Requires the `envelope` feature.
 
 ```rust
-use ic_auth_verifier::{SignedEnvelope, unix_timestamp};
+use ic_auth_verifier::SignedEnvelope;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 let envelope = SignedEnvelope::from_authorization(&headers).unwrap();
 // Verify the envelope
-envelope.verify(unix_timestamp().as_millis() as u64, None, None)?;
+let now_ms = SystemTime::now()
+  .duration_since(UNIX_EPOCH)
+  .unwrap()
+  .as_millis() as u64;
+envelope.verify(now_ms, None, None)?;
 ```
 
 ## License

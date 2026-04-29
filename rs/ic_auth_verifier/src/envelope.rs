@@ -29,6 +29,9 @@ pub const ANONYMOUS_PRINCIPAL: Principal = Principal::anonymous();
 /// This prevents replay attacks while allowing for reasonable clock differences.
 pub const PERMITTED_DRIFT_MS: u64 = 300 * 1000;
 
+/// Maximum allowed delegation chain length.
+pub const MAX_DELEGATION_CHAIN_LENGTH: usize = 5;
+
 /// Domain separator for delegation signature messages.
 pub const IC_REQUEST_AUTH_DELEGATION_DOMAIN_SEPARATOR: &[u8] = b"\x1Aic-request-auth-delegation";
 
@@ -326,21 +329,21 @@ impl SignedEnvelope {
 
         let mut last_verified = &self.pubkey;
         if let Some(delegation) = &self.delegation {
-            if delegation.len() > 5 {
+            if delegation.len() > MAX_DELEGATION_CHAIN_LENGTH {
                 return Err(format!(
-                    "Delegation chain length exceeds the limit 5: {}",
+                    "Delegation chain length exceeds the limit {}: {}",
+                    MAX_DELEGATION_CHAIN_LENGTH,
                     delegation.len()
                 ));
             }
 
             for d in delegation {
-                if d.delegation.expiration / 1_000_000 < now_ms - PERMITTED_DRIFT_MS {
+                if is_delegation_expired(d.delegation.expiration, now_ms) {
                     return Err(format!(
                         "Delegation has expired:\n\
                          Provided expiry:    {}\n\
                          Local replica timestamp: {}",
-                        d.delegation.expiration,
-                        now_ms * 1_000_000,
+                        d.delegation.expiration, current_time_ns,
                     ));
                 }
 
@@ -531,17 +534,24 @@ pub fn verify_delegation_chain(
         return Err("Delegation chain is empty".to_string());
     }
 
+    if delegations.len() > MAX_DELEGATION_CHAIN_LENGTH {
+        return Err(format!(
+            "Delegation chain length exceeds the limit {}: {}",
+            MAX_DELEGATION_CHAIN_LENGTH,
+            delegations.len()
+        ));
+    }
+
     let current_time_ns = now_ms as u128 * 1_000_000;
     let ic_root_public_key_raw = ic_root_public_key_raw.unwrap_or(IC_ROOT_PK_DER);
     let mut last_verified = user_pubkey;
     for d in delegations {
-        if d.delegation.expiration / 1_000_000 < now_ms - PERMITTED_DRIFT_MS {
+        if is_delegation_expired(d.delegation.expiration, now_ms) {
             return Err(format!(
                 "Delegation has expired:\n\
                          Provided expiry:    {}\n\
                          Local replica timestamp: {}",
-                d.delegation.expiration,
-                now_ms * 1_000_000,
+                d.delegation.expiration, current_time_ns,
             ));
         }
 
@@ -584,6 +594,11 @@ pub fn verify_delegation_chain(
     }
 
     Ok(())
+}
+
+fn is_delegation_expired(expiration_ns: u64, now_ms: u64) -> bool {
+    let earliest_valid_ms = now_ms.saturating_sub(PERMITTED_DRIFT_MS);
+    expiration_ns / 1_000_000 < earliest_valid_ms
 }
 
 /// Extracts base64url-encoded data from an HTTP header.
@@ -825,6 +840,29 @@ mod tests {
         let res = verify_sig_with_rootkey(&root, &pk_der, &msg, &sig, &0);
         println!("Verification result: {:?}", res);
         assert!(res.is_ok());
+    }
+
+    #[test]
+    fn test_delegation_expiration_check_saturates_drift() {
+        assert!(!is_delegation_expired(0, 0));
+        assert!(!is_delegation_expired(0, PERMITTED_DRIFT_MS - 1));
+        assert!(is_delegation_expired(0, PERMITTED_DRIFT_MS + 1));
+    }
+
+    #[test]
+    fn test_verify_delegation_chain_rejects_too_many_delegations() {
+        let delegation = SignedDelegationCompact {
+            delegation: DelegationCompact {
+                pubkey: ByteBufB64::new(),
+                expiration: u64::MAX,
+                targets: None,
+            },
+            signature: ByteBufB64::new(),
+        };
+        let delegations = vec![delegation; MAX_DELEGATION_CHAIN_LENGTH + 1];
+
+        let err = verify_delegation_chain(&[], &[], &delegations, 0, None).unwrap_err();
+        assert!(err.contains("Delegation chain length exceeds the limit"));
     }
 
     #[test]

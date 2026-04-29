@@ -57,28 +57,44 @@ where
     ///
     /// # Returns
     ///
-    /// A new `url::Url` instance with the request parameters and payload
+    /// A `Result` containing a new `url::Url` instance with the request parameters and payload.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// This method will panic if the payload serialization to CBOR fails
-    pub fn to_url(&self, endpoint: &url::Url) -> url::Url {
+    /// Returns an error if the payload cannot be serialized to CBOR.
+    pub fn try_to_url(&self, endpoint: &url::Url) -> Result<url::Url, String> {
         let mut url = endpoint.clone();
-        url.query_pairs_mut()
-            .append_pair("os", self.os)
-            .append_pair("action", self.action);
+        {
+            let mut query = url.query_pairs_mut();
+            query
+                .append_pair("os", self.os)
+                .append_pair("action", self.action);
 
-        if let Some(next_url) = self.next_url {
-            url.query_pairs_mut().append_pair("next_url", next_url);
+            if let Some(next_url) = self.next_url {
+                query.append_pair("next_url", next_url);
+            }
         }
 
         if let Some(payload) = &self.payload {
-            let data =
-                deterministic_cbor_into_vec(payload).expect("Failed to serialize payload to CBOR");
-            url.set_fragment(Some(ByteBufB64(data).to_string().as_str()));
+            let data = deterministic_cbor_into_vec(payload)
+                .map_err(|err| format!("failed to serialize payload to CBOR: {err}"))?;
+            let fragment = ByteBufB64(data).to_string();
+            url.set_fragment(Some(&fragment));
+        } else {
+            url.set_fragment(None);
         }
 
-        url
+        Ok(url)
+    }
+
+    /// Converts the request into a URL with query parameters and fragment.
+    ///
+    /// # Panics
+    ///
+    /// This method will panic if the payload serialization to CBOR fails.
+    pub fn to_url(&self, endpoint: &url::Url) -> url::Url {
+        self.try_to_url(endpoint)
+            .expect("Failed to serialize payload to CBOR")
     }
 }
 
@@ -121,21 +137,24 @@ impl DeepLinkResponse {
     ///
     /// A `Result` containing either the parsed `DeepLinkResponse` or an error message
     pub fn from_url(url: url::Url) -> Result<Self, String> {
-        let mut query_pairs = url.query_pairs();
         let payload = match url.fragment() {
             Some(f) => Some(ByteBufB64::from_str(f).map_err(|err| format!("{err:?}"))?),
             None => None,
         };
 
+        let mut os = None;
+        let mut action = None;
+        for (key, value) in url.query_pairs() {
+            match key.as_ref() {
+                "os" if os.is_none() => os = Some(value.into_owned()),
+                "action" if action.is_none() => action = Some(value.into_owned()),
+                _ => {}
+            }
+        }
+
         Ok(DeepLinkResponse {
-            os: query_pairs
-                .find(|(k, _)| k == "os")
-                .map(|(_, v)| v.to_string())
-                .unwrap_or_default(),
-            action: query_pairs
-                .find(|(k, _)| k == "action")
-                .map(|(_, v)| v.to_string())
-                .unwrap_or_default(),
+            os: os.unwrap_or_default(),
+            action: action.unwrap_or_default(),
             payload,
             url,
         })
@@ -200,4 +219,60 @@ pub struct SignInResponse {
     pub authn_method: String,
     #[serde(rename = "o")]
     pub origin: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use url::Url;
+
+    #[derive(Debug, Deserialize, PartialEq, Serialize)]
+    struct Payload {
+        value: String,
+    }
+
+    #[test]
+    fn test_response_reads_query_params_in_any_order() {
+        let url = Url::parse("https://example.com/callback?action=SignIn&os=ios").unwrap();
+        let response = DeepLinkResponse::from_url(url).unwrap();
+
+        assert_eq!(response.os, "ios");
+        assert_eq!(response.action, "SignIn");
+    }
+
+    #[test]
+    fn test_request_clears_endpoint_fragment_without_payload() {
+        let endpoint = Url::parse("https://auth.example.com/start#stale-fragment").unwrap();
+        let request = DeepLinkRequest::<()> {
+            os: "ios",
+            action: "SignIn",
+            next_url: None,
+            payload: None,
+        };
+
+        let url = request.try_to_url(&endpoint).unwrap();
+
+        assert_eq!(url.fragment(), None);
+    }
+
+    #[test]
+    fn test_request_response_payload_roundtrip() {
+        let endpoint = Url::parse("https://auth.example.com/start").unwrap();
+        let request = DeepLinkRequest {
+            os: "ios",
+            action: "SignIn",
+            next_url: Some("https://example.com/callback"),
+            payload: Some(Payload {
+                value: "hello".to_string(),
+            }),
+        };
+
+        let url = request.try_to_url(&endpoint).unwrap();
+        let response = DeepLinkResponse::from_url(url).unwrap();
+        let payload: Payload = response.get_payload().unwrap();
+
+        assert_eq!(response.os, "ios");
+        assert_eq!(response.action, "SignIn");
+        assert_eq!(payload.value, "hello");
+    }
 }

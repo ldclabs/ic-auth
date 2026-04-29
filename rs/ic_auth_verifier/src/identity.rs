@@ -181,7 +181,7 @@ pub fn get_expiration(identity: &impl Identity) -> Option<u64> {
     }
 
     let mut expiration = u64::MAX;
-    for delegation in identity.delegation_chain() {
+    for delegation in chain {
         if delegation.delegation.expiration < expiration {
             expiration = delegation.delegation.expiration;
         }
