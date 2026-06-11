@@ -1,14 +1,13 @@
 use base64::{
     Engine,
-    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
+    engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
 };
 use candid::{CandidType, Principal};
 use ciborium::from_reader;
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName};
-#[cfg(feature = "identity")]
-use ic_auth_types::DelegationCompact;
 use ic_auth_types::{
-    ByteBufB64, SignedDelegation, SignedDelegationCompact, deterministic_cbor_into_vec,
+    ByteBufB64, DelegationCompact, SignedDelegation, SignedDelegationCompact,
+    deterministic_cbor_into_vec,
 };
 use ic_canister_sig_creation::delegation_signature_msg;
 use serde::{Deserialize, Serialize};
@@ -264,31 +263,9 @@ impl SignedEnvelope {
     pub fn sign_digest(identity: &impl Identity, digest: Vec<u8>) -> Result<Self, String> {
         let sig = identity
             .sign_arbitrary(&digest)
-            .map_err(|err| format!("{:?}", err))?;
-        let envelope = Self {
-            pubkey: sig
-                .public_key
-                .ok_or_else(|| "missing public_key".to_string())?
-                .into(),
-            signature: sig
-                .signature
-                .ok_or_else(|| "missing signature".to_string())?
-                .into(),
-            digest: Some(digest.into()),
-            delegation: sig.delegations.map(|delegations| {
-                delegations
-                    .into_iter()
-                    .map(|d| SignedDelegationCompact {
-                        delegation: DelegationCompact {
-                            pubkey: d.delegation.pubkey.into(),
-                            expiration: d.delegation.expiration,
-                            targets: d.delegation.targets,
-                        },
-                        signature: d.signature.into(),
-                    })
-                    .collect::<Vec<_>>()
-            }),
-        };
+            .map_err(|err| format!("{err:?}"))?;
+        let mut envelope: Self = sig.try_into()?;
+        envelope.digest = Some(digest.into());
         Ok(envelope)
     }
 
@@ -341,46 +318,18 @@ impl SignedEnvelope {
             }
 
             for d in delegation {
-                if is_delegation_expired(d.delegation.expiration, now_ms) {
-                    return Err(format!(
-                        "Delegation has expired:\n\
-                         Provided expiry:    {}\n\
-                         Local replica timestamp: {}",
-                        d.delegation.expiration, current_time_ns,
-                    ));
+                check_delegation_expiration(d.delegation.expiration, now_ms)?;
+
+                if let (Some(targets), Some(target)) = (&d.delegation.targets, &expect_target) {
+                    // Should check if the expected target is in the delegation targets
+                    if !targets.contains(target) {
+                        return Err(format!(
+                            "Expected target canister ID '{expect_target:?}' is not in the delegation targets: {targets:?}"
+                        ));
+                    }
                 }
 
-                let targets = match &d.delegation.targets {
-                    Some(targets) => {
-                        if let Some(target) = &expect_target {
-                            // Should check if the expected target is in the delegation targets
-                            if !targets.contains(target) {
-                                return Err(format!(
-                                    "Expected target canister ID '{expect_target:?}' is not in the delegation targets: {:?}",
-                                    targets
-                                ));
-                            }
-                        }
-                        Some(
-                            targets
-                                .iter()
-                                .map(|p| p.as_slice().to_vec())
-                                .collect::<Vec<Vec<u8>>>(),
-                        )
-                    }
-                    None => None,
-                };
-
-                let msg = delegation_signature_msg(
-                    d.delegation.pubkey.as_slice(),
-                    d.delegation.expiration,
-                    targets.as_ref(),
-                );
-                let mut message = Vec::with_capacity(
-                    IC_REQUEST_AUTH_DELEGATION_DOMAIN_SEPARATOR.len() + msg.len(),
-                );
-                message.extend_from_slice(IC_REQUEST_AUTH_DELEGATION_DOMAIN_SEPARATOR);
-                message.extend(msg);
+                let message = delegation_signed_message(&d.delegation);
                 verify_sig(last_verified, &message, &d.signature, &current_time_ns)?;
 
                 last_verified = &d.delegation.pubkey;
@@ -440,30 +389,26 @@ impl SignedEnvelope {
     /// * `headers` - The HTTP headers to extract from
     ///
     /// # Returns
-    /// * `Option<Self>` - The extracted envelope, or None if not found or invalid
+    /// * `Option<Self>` - The extracted envelope, or None if not found or invalid.
+    ///   A delegation header that is present but malformed invalidates the whole envelope.
     pub fn from_headers(headers: &HeaderMap) -> Option<Self> {
-        if let Some(pubkey) = extract_data(headers, &HEADER_IC_AUTH_PUBKEY)
-            && let Some(digest) = extract_data(headers, &HEADER_IC_AUTH_CONTENT_DIGEST)
-            && let Some(signature) = extract_data(headers, &HEADER_IC_AUTH_SIGNATURE)
-        {
-            let mut envelope = Self {
-                pubkey: pubkey.into(),
-                signature: signature.into(),
-                digest: Some(digest.into()),
-                delegation: None,
-            };
-            match extract_data(headers, &HEADER_IC_AUTH_DELEGATION) {
-                Some(data) => {
-                    if let Ok(delegation) = from_reader(&data[..]) {
-                        envelope.delegation = Some(delegation);
-                        return Some(envelope);
-                    }
-                }
-                None => return Some(envelope),
+        let pubkey = extract_data(headers, &HEADER_IC_AUTH_PUBKEY)?;
+        let digest = extract_data(headers, &HEADER_IC_AUTH_CONTENT_DIGEST)?;
+        let signature = extract_data(headers, &HEADER_IC_AUTH_SIGNATURE)?;
+        let delegation = match headers.get(&HEADER_IC_AUTH_DELEGATION) {
+            Some(_) => {
+                let data = extract_data(headers, &HEADER_IC_AUTH_DELEGATION)?;
+                Some(from_reader(&data[..]).ok()?)
             }
-        }
+            None => None,
+        };
 
-        None
+        Some(Self {
+            pubkey: pubkey.into(),
+            signature: signature.into(),
+            digest: Some(digest.into()),
+            delegation,
+        })
     }
 
     /// Adds the SignedEnvelope components to the IC-Auth-* HTTP headers.
@@ -549,33 +494,9 @@ pub fn verify_delegation_chain(
     let ic_root_public_key_raw = ic_root_public_key_raw.unwrap_or(IC_ROOT_PK_DER);
     let mut last_verified = user_pubkey;
     for d in delegations {
-        if is_delegation_expired(d.delegation.expiration, now_ms) {
-            return Err(format!(
-                "Delegation has expired:\n\
-                         Provided expiry:    {}\n\
-                         Local replica timestamp: {}",
-                d.delegation.expiration, current_time_ns,
-            ));
-        }
+        check_delegation_expiration(d.delegation.expiration, now_ms)?;
 
-        let msg = delegation_signature_msg(
-            d.delegation.pubkey.as_slice(),
-            d.delegation.expiration,
-            d.delegation
-                .targets
-                .as_ref()
-                .map(|targets| {
-                    targets
-                        .iter()
-                        .map(|p| p.as_slice().to_vec())
-                        .collect::<Vec<Vec<u8>>>()
-                })
-                .as_ref(),
-        );
-        let mut message =
-            Vec::with_capacity(IC_REQUEST_AUTH_DELEGATION_DOMAIN_SEPARATOR.len() + msg.len());
-        message.extend_from_slice(IC_REQUEST_AUTH_DELEGATION_DOMAIN_SEPARATOR);
-        message.extend(msg);
+        let message = delegation_signed_message(&d.delegation);
         verify_sig_with_rootkey(
             ic_root_public_key_raw,
             last_verified,
@@ -602,6 +523,39 @@ pub fn verify_delegation_chain(
 fn is_delegation_expired(expiration_ns: u64, now_ms: u64) -> bool {
     let earliest_valid_ms = now_ms.saturating_sub(PERMITTED_DRIFT_MS);
     expiration_ns / 1_000_000 < earliest_valid_ms
+}
+
+fn check_delegation_expiration(expiration_ns: u64, now_ms: u64) -> Result<(), String> {
+    if is_delegation_expired(expiration_ns, now_ms) {
+        return Err(format!(
+            "Delegation has expired:\n\
+             Provided expiry:    {}\n\
+             Local replica timestamp: {}",
+            expiration_ns,
+            now_ms as u128 * 1_000_000,
+        ));
+    }
+    Ok(())
+}
+
+/// Builds the domain-separated message whose signature authorizes the delegation.
+fn delegation_signed_message(delegation: &DelegationCompact) -> Vec<u8> {
+    let targets = delegation.targets.as_ref().map(|targets| {
+        targets
+            .iter()
+            .map(|p| p.as_slice().to_vec())
+            .collect::<Vec<Vec<u8>>>()
+    });
+    let msg = delegation_signature_msg(
+        delegation.pubkey.as_slice(),
+        delegation.expiration,
+        targets.as_ref(),
+    );
+    let mut message =
+        Vec::with_capacity(IC_REQUEST_AUTH_DELEGATION_DOMAIN_SEPARATOR.len() + msg.len());
+    message.extend_from_slice(IC_REQUEST_AUTH_DELEGATION_DOMAIN_SEPARATOR);
+    message.extend(msg);
+    message
 }
 
 /// Extracts base64url-encoded data from an HTTP header.
@@ -644,19 +598,24 @@ pub fn extract_user(headers: &HeaderMap) -> Principal {
     }
 }
 
-/// Decodes base64url-encoded data.
+/// Decodes base64-encoded data.
 ///
-/// This function handles both padded and unpadded base64url data.
+/// This function handles both padded and unpadded data, in either the
+/// base64url or the standard base64 alphabet.
 ///
 /// # Arguments
-/// * `data` - The base64url-encoded string to decode
+/// * `data` - The base64-encoded string to decode
 ///
 /// # Returns
 /// * `Result<Vec<u8>, String>` - The decoded data or an error message
 pub fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
-    URL_SAFE_NO_PAD
-        .decode(data.trim().trim_end_matches('='))
-        .map_err(|err| format!("failed to decode base64 data: {err}"))
+    let data = data.trim().trim_end_matches('=');
+    if data.contains(['+', '/']) {
+        STANDARD_NO_PAD.decode(data)
+    } else {
+        URL_SAFE_NO_PAD.decode(data)
+    }
+    .map_err(|err| format!("failed to decode base64 data: {err}"))
 }
 
 /// SignedEnvelopeFull is a full representation of the SignedEnvelope.
@@ -898,6 +857,10 @@ mod tests {
     #[test]
     fn test_base64_and_header_helpers_reject_invalid_input() {
         assert!(decode_base64("%%%").is_err());
+        // both base64 alphabets are accepted, padded or not
+        assert_eq!(decode_base64("-__v").unwrap(), vec![251, 255, 239]);
+        assert_eq!(decode_base64("+//v").unwrap(), vec![251, 255, 239]);
+        assert_eq!(decode_base64("+//v==").unwrap(), vec![251, 255, 239]);
 
         let mut headers = HeaderMap::new();
         headers.insert(&HEADER_IC_AUTH_PUBKEY, "%%%".parse().unwrap());
@@ -959,9 +922,13 @@ mod tests {
 
         assert_eq!(decoded.delegation.unwrap().len(), 1);
 
+        // a present but malformed delegation header invalidates the whole envelope
         headers.insert(&HEADER_IC_AUTH_DELEGATION, "%%%".parse().unwrap());
-        let decoded = SignedEnvelope::from_headers(&headers).unwrap();
-        assert!(decoded.delegation.is_none());
+        assert!(SignedEnvelope::from_headers(&headers).is_none());
+
+        // valid base64 but invalid CBOR is also rejected
+        headers.insert(&HEADER_IC_AUTH_DELEGATION, "_w".parse().unwrap());
+        assert!(SignedEnvelope::from_headers(&headers).is_none());
     }
 
     #[test]

@@ -8,24 +8,23 @@ export function deterministicEncode(data: any): Uint8Array {
 }
 
 export function compareBytes(a: Uint8Array, b: Uint8Array): number {
-  if (a instanceof Uint8Array && b instanceof Uint8Array) {
-    if (a === b) {
-      return 0
-    }
+  if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) {
+    throw new Error('ic-auth: compareBytes: invalid arguments')
+  }
 
-    for (let i = 0; i < a.length; i++) {
-      if (a[i] === b[i]) {
-        continue
-      }
-      return a[i] < b[i] ? -1 : 1
-    }
-
-    if (b.length > a.length) {
-      return -1
-    }
-
+  if (a === b) {
     return 0
   }
 
-  throw new Error('ic-auth: compareBytes: invalid arguments')
+  const len = Math.min(a.length, b.length)
+  for (let i = 0; i < len; i++) {
+    if (a[i] !== b[i]) {
+      return a[i] < b[i] ? -1 : 1
+    }
+  }
+
+  if (a.length === b.length) {
+    return 0
+  }
+  return a.length < b.length ? -1 : 1
 }

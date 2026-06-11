@@ -173,10 +173,9 @@ impl DeepLinkResponse {
     ///
     /// A `Result` containing either the deserialized payload or an error message
     pub fn get_payload<T: DeserializeOwned>(&self) -> Result<T, String> {
-        if let Some(payload) = &self.payload {
-            Ok(from_reader(payload.as_slice()).map_err(|err| format!("{err:?}"))?)
-        } else {
-            Err("Payload is missing in the deep link response".to_string())
+        match &self.payload {
+            Some(payload) => from_reader(payload.as_slice()).map_err(|err| format!("{err:?}")),
+            None => Err("Payload is missing in the deep link response".to_string()),
         }
     }
 }

@@ -139,6 +139,18 @@ describe('types', () => {
       full
     )
 
+    assert.deepEqual(
+      toSignedEnvelope({ public_key: pubkey, signature } as any),
+      { pubkey, signature }
+    )
+
+    const fromCompact = toSignedEnvelope({ p: pubkey, s: signature })
+    assert.deepEqual(fromCompact, { pubkey, signature })
+    // optional fields must be absent, not present with an undefined value,
+    // so they do not leak into CBOR encodings
+    assert.isFalse('digest' in fromCompact)
+    assert.isFalse('delegation' in fromCompact)
+
     assert.deepEqual(toSignedEnvelopeCompact({ pubkey, signature }), {
       p: pubkey,
       s: signature

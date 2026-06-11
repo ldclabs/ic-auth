@@ -176,26 +176,37 @@ export function toSignedEnvelope(
     return obj
   }
 
-  if (
-    'public_key' in obj &&
-    'signature' in obj &&
-    'digest' in obj &&
-    'delegation' in obj
-  ) {
-    return {
-      pubkey: obj.public_key as Uint8Array,
-      signature: obj.signature as Uint8Array,
-      digest: obj.digest as Uint8Array,
-      delegation: obj.delegation as SignedDelegation[]
+  if ('public_key' in obj && 'signature' in obj) {
+    const o = obj as unknown as {
+      public_key: Uint8Array
+      signature: Uint8Array
+      digest?: Uint8Array
+      delegation?: Array<SignedDelegation | SignedDelegationCompact>
     }
+    const val: SignedEnvelope = {
+      pubkey: o.public_key,
+      signature: o.signature
+    }
+    if (o.digest) {
+      val.digest = o.digest
+    }
+    if (o.delegation) {
+      val.delegation = o.delegation.map(toSignedDelegation)
+    }
+    return val
   }
 
-  return {
+  const val: SignedEnvelope = {
     pubkey: obj.p,
-    signature: obj.s,
-    digest: obj.h,
-    delegation: obj.d?.map(toSignedDelegation)
+    signature: obj.s
   }
+  if (obj.h) {
+    val.digest = obj.h
+  }
+  if (obj.d) {
+    val.delegation = obj.d.map(toSignedDelegation)
+  }
+  return val
 }
 
 export interface SignedEnvelopeCompact {

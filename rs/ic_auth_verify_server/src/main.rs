@@ -13,8 +13,6 @@ use structured_logger::unix_ms;
 use structured_logger::{Builder, async_json::new_writer, get_env_level};
 #[cfg(not(test))]
 use tokio::signal;
-#[cfg(not(test))]
-use tokio_util::sync::CancellationToken;
 
 mod content;
 use content::Content;
@@ -49,7 +47,7 @@ async fn main() -> Result<(), BoxError> {
         .with_target_writer("*", new_writer(tokio::io::stdout()))
         .init();
 
-    let signal = shutdown_signal(CancellationToken::new());
+    let signal = shutdown_signal();
     let app = Router::new()
         .route("/", routing::get(get_information))
         .route("/verify", routing::post(post_verify));
@@ -67,7 +65,7 @@ async fn main() -> Result<(), BoxError> {
 }
 
 #[cfg(not(test))]
-pub async fn shutdown_signal(cancel_token: CancellationToken) {
+pub async fn shutdown_signal() {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
@@ -91,7 +89,6 @@ pub async fn shutdown_signal(cancel_token: CancellationToken) {
     }
 
     log::warn!("received termination signal, starting graceful shutdown");
-    cancel_token.cancel();
 }
 
 pub async fn create_reuse_port_listener(
@@ -148,16 +145,13 @@ async fn post_verify(ct: Content<VerifyInput>) -> impl IntoResponse {
         }
     };
 
-    match signed_envelope.verify(
+    if let Err(err) = signed_envelope.verify(
         now_ms,
         req.expect_target,
         req.expect_digest.as_ref().map(|d| d.as_slice()),
     ) {
-        Ok(_) => {}
-        Err(err) => {
-            return Content::Text(format!("{err:?}"), Some(StatusCode::UNAUTHORIZED));
-        }
-    };
+        return Content::Text(err, Some(StatusCode::UNAUTHORIZED));
+    }
     let out = VerifyOutput {
         user: Principal::self_authenticating(&signed_envelope.pubkey),
     };

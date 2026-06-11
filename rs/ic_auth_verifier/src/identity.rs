@@ -175,19 +175,11 @@ impl Identity for AtomicIdentity {
 /// An `Option<u64>` containing the earliest expiration time in nanoseconds since the UNIX epoch,
 /// or `None` if there are no delegations in the chain.
 pub fn get_expiration(identity: &impl Identity) -> Option<u64> {
-    let chain = identity.delegation_chain();
-    if chain.is_empty() {
-        return None;
-    }
-
-    let mut expiration = u64::MAX;
-    for delegation in chain {
-        if delegation.delegation.expiration < expiration {
-            expiration = delegation.delegation.expiration;
-        }
-    }
-
-    Some(expiration)
+    identity
+        .delegation_chain()
+        .into_iter()
+        .map(|d| d.delegation.expiration)
+        .min()
 }
 
 /// Converts an `ic_auth_types::SignedDelegation` to an `ic_agent::identity::SignedDelegation`.
@@ -441,7 +433,7 @@ mod tests {
         let basic = new_basic_identity();
         let atomic = AtomicIdentity::new(Box::new(basic));
         let signature = atomic.sign_arbitrary(b"hello").unwrap();
-        assert!(signature.signature.unwrap().len() > 0);
+        assert!(!signature.signature.unwrap().is_empty());
 
         let envelope = EnvelopeContent::Query {
             ingress_expiry: unix_timestamp()
@@ -455,7 +447,7 @@ mod tests {
             sender_info: None,
         };
         let signature = atomic.sign(&envelope).unwrap();
-        assert!(signature.signature.unwrap().len() > 0);
+        assert!(!signature.signature.unwrap().is_empty());
 
         let session = new_basic_identity();
         let delegation = Delegation {
@@ -466,7 +458,7 @@ mod tests {
             targets: Some(vec![Principal::management_canister()]),
         };
         let signature = atomic.sign_delegation(&delegation).unwrap();
-        assert!(signature.signature.unwrap().len() > 0);
+        assert!(!signature.signature.unwrap().is_empty());
     }
 
     #[test]

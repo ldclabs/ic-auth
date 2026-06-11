@@ -41,6 +41,14 @@ describe('cbor', () => {
       () => compareBytes([1, 2] as any, new Uint8Array([1, 2])),
       /invalid arguments/
     )
+    assert.throws(
+      () => compareBytes(new Uint8Array([1, 2]), [1, 2] as any),
+      /invalid arguments/
+    )
+    // shared prefix, differing lengths
+    assert.equal(compareBytes(new Uint8Array([0]), new Uint8Array()), 1)
+    assert.equal(compareBytes(new Uint8Array(), new Uint8Array([0])), -1)
+    assert.equal(compareBytes(new Uint8Array([0, 0]), new Uint8Array([0])), 1)
   })
 
   it('deterministicEncode', () => {
