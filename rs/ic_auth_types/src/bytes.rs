@@ -883,7 +883,10 @@ mod tests {
     use super::*;
     use base64::prelude::BASE64_STANDARD;
     use candid::encode_one;
+    use serde::de::Visitor as _;
+    use serde::de::value::{Error as ValueError, SeqDeserializer};
     use serde::{Deserialize, Serialize};
+    use std::hash::{Hash as _, Hasher as _};
 
     #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
     struct Test {
@@ -1012,6 +1015,7 @@ mod tests {
 
         assert_eq!(b_std.as_ref(), data.as_slice());
         assert_eq!(b_url.as_ref(), data.as_slice());
+        assert!(BytesB64::from_str("@@@").is_err());
     }
 
     #[test]
@@ -1034,5 +1038,281 @@ mod tests {
         ciborium::into_writer(&value, &mut data).unwrap();
         let parsed: S = ciborium::from_reader(&data[..]).unwrap();
         assert_eq!(parsed, value);
+    }
+
+    #[test]
+    fn test_bytebuf_public_api_and_traits() {
+        let empty = ByteBufB64::new();
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let mut buf = ByteBufB64::with_capacity(4);
+        assert!(buf.is_empty());
+        buf.push(1);
+        buf.as_mut()[0] = 2;
+        buf.deref_mut().push(3);
+        assert_eq!(buf.deref().as_slice(), &[2, 3]);
+        assert_eq!(buf.as_ref(), &[2, 3]);
+        assert_eq!(buf.len(), 2);
+        assert_eq!(buf.to_base64(), "AgM=");
+        assert_eq!(buf.clone().into_vec(), vec![2, 3]);
+        assert_eq!(buf.clone().into_boxed_slice().as_ref(), &[2, 3]);
+        assert_eq!(buf.clone().into_iter().collect::<Vec<_>>(), vec![2, 3]);
+        assert_eq!(buf.clone().into_iter().collect::<Vec<_>>(), vec![2, 3]);
+
+        for byte in &mut buf {
+            *byte += 1;
+        }
+        assert_eq!((&buf).into_iter().copied().collect::<Vec<_>>(), vec![3, 4]);
+
+        let from_array = <ByteBufB64 as From<[u8; 3]>>::from([5, 6, 7]);
+        assert_eq!(from_array.as_ref(), &[5, 6, 7]);
+        let from_bytebuf = <ByteBufB64 as From<ByteBuf>>::from(ByteBuf::from(vec![8, 9]));
+        assert_eq!(from_bytebuf.as_ref(), &[8, 9]);
+
+        assert!(ByteBufB64::default() < ByteBufB64::from(vec![1]));
+        assert_eq!(
+            ByteBufB64::from(vec![1]).partial_cmp(&vec![2]),
+            Some(core::cmp::Ordering::Less)
+        );
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        ByteBufB64::from(vec![1, 2, 3]).hash(&mut hasher);
+        assert_ne!(hasher.finish(), 0);
+        assert_eq!(
+            IntoIterator::into_iter(ByteBufB64::from(vec![18, 19])).collect::<Vec<_>>(),
+            vec![18, 19]
+        );
+        assert_eq!(
+            ByteBufB64::try_from("AgM=").unwrap(),
+            ByteBufB64(vec![2, 3])
+        );
+    }
+
+    #[test]
+    fn test_bytearray_public_api_and_traits() {
+        let empty = ByteArrayB64::<0>::new();
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let mut arr = ByteArrayB64::<3>::from([1, 2, 3]);
+        assert!(!arr.is_empty());
+        assert_eq!(arr.len(), 3);
+        assert_eq!(arr.as_slice(), &[1, 2, 3]);
+        arr.as_mut_slice()[0] = 4;
+        arr.as_mut()[1] = 5;
+        arr.deref_mut()[2] = 6;
+        assert_eq!(arr.deref(), &[4, 5, 6]);
+        assert_eq!(arr.to_base64(), "BAUG");
+        assert_eq!(arr.clone().into_array(), [4, 5, 6]);
+        assert_eq!(arr.clone().into_vec(), vec![4, 5, 6]);
+        assert_eq!(arr.clone().into_iter().collect::<Vec<_>>(), vec![4, 5, 6]);
+
+        for byte in &mut arr {
+            *byte += 1;
+        }
+        assert_eq!(
+            (&arr).into_iter().copied().collect::<Vec<_>>(),
+            vec![5, 6, 7]
+        );
+        assert_eq!(arr.into_iter().collect::<Vec<_>>(), vec![5, 6, 7]);
+
+        let from_slice = ByteArrayB64::<3>::try_from([8, 9, 10].as_slice()).unwrap();
+        assert_eq!(from_slice.as_ref(), &[8, 9, 10]);
+        assert!(ByteArrayB64::<3>::try_from([1, 2].as_slice()).is_err());
+        let from_vec = ByteArrayB64::<3>::try_from(vec![11, 12, 13]).unwrap();
+        assert_eq!(from_vec.as_ref(), &[11, 12, 13]);
+        assert_eq!(
+            ByteArrayB64::<3>::try_from(vec![1, 2]).unwrap_err(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            ByteArrayB64::<3>::try_from("AQID").unwrap().as_ref(),
+            &[1, 2, 3]
+        );
+        assert_eq!(
+            ByteArrayB64::<3>::from([1, 2, 3]).partial_cmp(&ByteArrayB64::<3>::from([2, 3, 4])),
+            Some(core::cmp::Ordering::Less)
+        );
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        ByteArrayB64::<3>::from([1, 2, 3]).hash(&mut hasher);
+        assert_ne!(hasher.finish(), 0);
+        assert_eq!(
+            IntoIterator::into_iter(ByteArrayB64::<3>::from([20, 21, 22])).collect::<Vec<_>>(),
+            vec![20, 21, 22]
+        );
+
+        let serde_array = ByteArray::new([14, 15, 16]);
+        assert_eq!(
+            <ByteArrayB64<3> as From<ByteArray<3>>>::from(serde_array).into_array(),
+            [14, 15, 16]
+        );
+    }
+
+    #[test]
+    fn test_byte_wrapper_candid_metadata_and_empty_formatting() {
+        let types = [
+            ByteBufB64::ty(),
+            ByteArrayB64::<0>::ty(),
+            ByteArrayB64::<4>::ty(),
+            BytesB64::<'static>::ty(),
+        ];
+        assert_eq!(types.len(), 4);
+        assert!(types.iter().all(|ty| !format!("{ty:?}").is_empty()));
+
+        let array = ByteArrayB64::<0>::new();
+        assert_eq!(array.as_slice(), &[] as &[u8]);
+        assert_eq!(array.clone().into_array(), [] as [u8; 0]);
+        assert_eq!(array.into_vec(), Vec::<u8>::new());
+
+        let buf = ByteBufB64::new();
+        assert_eq!(buf.to_string(), "");
+        assert_eq!(format!("{buf:?}"), "ByteBufB64()");
+
+        let bytes = BytesB64::new();
+        assert_eq!(bytes.to_base64(), "");
+        assert_eq!(bytes.to_string(), "");
+        assert_eq!(format!("{bytes:?}"), "BytesB64()");
+        assert_eq!(bytes.into_owned(), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn test_bytesb64_public_api_and_conversions() {
+        let empty = BytesB64::new();
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let data = [1u8, 2, 3];
+        let borrowed = BytesB64::from_slice(&data);
+        assert_eq!(borrowed.as_ref(), data.as_slice());
+        assert_eq!(borrowed.deref(), data.as_slice());
+        assert_eq!(borrowed.to_base64(), "AQID");
+        assert_eq!(format!("{borrowed}"), "AQID");
+        assert_eq!(format!("{borrowed:?}"), "BytesB64(AQID)");
+
+        let owned = BytesB64::from_vec(vec![4, 5, 6]);
+        assert_eq!(owned.clone().into_owned(), vec![4, 5, 6]);
+        assert_eq!(BytesB64::from(vec![7, 8]).as_ref(), &[7, 8]);
+        assert_eq!(BytesB64::from(&data[..]).as_ref(), data.as_slice());
+
+        let bytebuf = ByteBuf::from(vec![9, 10]);
+        assert_eq!(BytesB64::from(&bytebuf).as_ref(), &[9, 10]);
+        let bytes = Bytes::new(&data);
+        assert_eq!(BytesB64::from(bytes).as_ref(), data.as_slice());
+        let byte_array = ByteArray::new([11, 12, 13]);
+        assert_eq!(BytesB64::from(&byte_array).as_ref(), &[11, 12, 13]);
+        let b64 = ByteBufB64::from(vec![14, 15]);
+        assert_eq!(BytesB64::from(&b64).as_ref(), &[14, 15]);
+        let a64 = ByteArrayB64::<2>::from([16, 17]);
+        assert_eq!(BytesB64::from(&a64).as_ref(), &[16, 17]);
+
+        assert_eq!(
+            BytesB64::try_from("AQID").unwrap().as_ref(),
+            data.as_slice()
+        );
+    }
+
+    #[test]
+    fn test_deserialize_visitors_cover_string_bytes_and_sequences() {
+        let bytebuf = deserialize::ByteBufB64Visitor
+            .visit_string::<ValueError>("AQID".to_string())
+            .unwrap();
+        assert_eq!(bytebuf.as_ref(), &[1, 2, 3]);
+        let bytebuf = deserialize::ByteBufB64Visitor
+            .visit_bytes::<ValueError>(&[4, 5, 6])
+            .unwrap();
+        assert_eq!(bytebuf.as_ref(), &[4, 5, 6]);
+        let bytebuf = deserialize::ByteBufB64Visitor
+            .visit_byte_buf::<ValueError>(vec![7, 8, 9])
+            .unwrap();
+        assert_eq!(bytebuf.as_ref(), &[7, 8, 9]);
+        let seq = SeqDeserializer::<_, ValueError>::new(vec![10u8, 11, 12].into_iter());
+        let bytebuf = deserialize::ByteBufB64Visitor.visit_seq(seq).unwrap();
+        assert_eq!(bytebuf.as_ref(), &[10, 11, 12]);
+
+        let bytes = deserialize::BytesB64Visitor(core::marker::PhantomData)
+            .visit_string::<ValueError>("AQID".to_string())
+            .unwrap();
+        assert_eq!(bytes.as_ref(), &[1, 2, 3]);
+        let bytes = deserialize::BytesB64Visitor(core::marker::PhantomData)
+            .visit_bytes::<ValueError>(&[4, 5, 6])
+            .unwrap();
+        assert_eq!(bytes.as_ref(), &[4, 5, 6]);
+        let seq = SeqDeserializer::<_, ValueError>::new(vec![7u8, 8, 9].into_iter());
+        let bytes = deserialize::BytesB64Visitor(core::marker::PhantomData)
+            .visit_seq(seq)
+            .unwrap();
+        assert_eq!(bytes.as_ref(), &[7, 8, 9]);
+
+        let array = deserialize::ByteArrayB64Visitor::<3>
+            .visit_string::<ValueError>("AQID".to_string())
+            .unwrap();
+        assert_eq!(array.as_ref(), &[1, 2, 3]);
+        let array = deserialize::ByteArrayB64Visitor::<3>
+            .visit_bytes::<ValueError>(&[4, 5, 6])
+            .unwrap();
+        assert_eq!(array.as_ref(), &[4, 5, 6]);
+        let err = deserialize::ByteArrayB64Visitor::<3>
+            .visit_bytes::<ValueError>(&[1, 2])
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid length"));
+        let err = deserialize::ByteArrayB64Visitor::<3>
+            .visit_byte_buf::<ValueError>(vec![1, 2])
+            .unwrap_err();
+        assert!(err.to_string().contains("invalid length"));
+        let seq = SeqDeserializer::<_, ValueError>::new(vec![7u8, 8, 9].into_iter());
+        let array = deserialize::ByteArrayB64Visitor::<3>
+            .visit_seq(seq)
+            .unwrap();
+        assert_eq!(array.as_ref(), &[7, 8, 9]);
+        let seq = SeqDeserializer::<_, ValueError>::new(vec![1u8, 2].into_iter());
+        assert!(
+            deserialize::ByteArrayB64Visitor::<3>
+                .visit_seq(seq)
+                .unwrap_err()
+                .to_string()
+                .contains("invalid length")
+        );
+        let seq = SeqDeserializer::<_, ValueError>::new(vec![1u8, 2, 3, 4].into_iter());
+        assert!(
+            deserialize::ByteArrayB64Visitor::<3>
+                .visit_seq(seq)
+                .unwrap_err()
+                .to_string()
+                .contains("invalid length")
+        );
+
+        #[allow(dead_code)]
+        #[derive(Debug, Deserialize)]
+        struct WithByteBuf {
+            value: ByteBufB64,
+        }
+        #[allow(dead_code)]
+        #[derive(Debug, Deserialize)]
+        struct WithBytes {
+            value: BytesB64<'static>,
+        }
+        #[allow(dead_code)]
+        #[derive(Debug, Deserialize)]
+        struct WithByteArray {
+            value: ByteArrayB64<3>,
+        }
+        assert!(
+            serde_json::from_str::<WithByteBuf>(r#"{"value":true}"#)
+                .unwrap_err()
+                .to_string()
+                .contains("bytes or string")
+        );
+        assert!(
+            serde_json::from_str::<WithBytes>(r#"{"value":true}"#)
+                .unwrap_err()
+                .to_string()
+                .contains("bytes or string")
+        );
+        assert!(
+            serde_json::from_str::<WithByteArray>(r#"{"value":true}"#)
+                .unwrap_err()
+                .to_string()
+                .contains("bytes or string")
+        );
     }
 }

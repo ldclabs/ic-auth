@@ -2,7 +2,7 @@ use axum_core::{
     extract::{FromRequest, Request},
     response::{IntoResponse, Response},
 };
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::Bytes;
 use http::{
     StatusCode,
     header::{self, HeaderMap, HeaderValue},
@@ -101,66 +101,313 @@ where
     T: Serialize,
 {
     fn into_response(self) -> Response {
-        let mut buf = BytesMut::with_capacity(128).writer();
         match self {
-            Self::Json(v, c) => match serde_json::to_writer(&mut buf, &v) {
-                Ok(()) => (
-                    c.unwrap_or_default(),
-                    [(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static(CONTENT_TYPE_JSON),
-                    )],
-                    buf.into_inner().freeze(),
-                )
-                    .into_response(),
-                Err(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    [(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static(CONTENT_TYPE_TEXT),
-                    )],
-                    err.to_string(),
-                )
-                    .into_response(),
-            },
-            Self::Cbor(v, c) => match ciborium::into_writer(&v, &mut buf) {
-                Ok(()) => (
-                    c.unwrap_or_default(),
-                    [(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static(CONTENT_TYPE_CBOR),
-                    )],
-                    buf.into_inner().freeze(),
-                )
-                    .into_response(),
-                Err(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    [(
-                        header::CONTENT_TYPE,
-                        HeaderValue::from_static(CONTENT_TYPE_TEXT),
-                    )],
-                    err.to_string(),
-                )
-                    .into_response(),
-            },
-            Self::Text(v, c) => (
+            Self::Json(v, c) => serialized_response(
                 c.unwrap_or_default(),
-                [(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static(CONTENT_TYPE_TEXT),
-                )],
-                v,
-            )
-                .into_response(),
-            Self::Other(v, c) => (
+                CONTENT_TYPE_JSON,
+                serde_json::to_vec(&v)
+                    .map(Bytes::from)
+                    .map_err(|err| err.to_string()),
+            ),
+            Self::Cbor(v, c) => {
+                let mut buf = Vec::new();
+                let body = ciborium::into_writer(&v, &mut buf)
+                    .map(|()| Bytes::from(buf))
+                    .map_err(|err| err.to_string());
+                serialized_response(c.unwrap_or_default(), CONTENT_TYPE_CBOR, body)
+            }
+            Self::Text(v, c) => text_response(c.unwrap_or_default(), v),
+            Self::Other(v, c) => text_response(
                 c.unwrap_or(StatusCode::UNSUPPORTED_MEDIA_TYPE),
-                [(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static(CONTENT_TYPE_TEXT),
-                )],
                 format!("Unsupported MIME type: {}", v),
-            )
-                .into_response(),
+            ),
         }
+    }
+}
+
+fn serialized_response(
+    status: StatusCode,
+    content_type: &'static str,
+    body: Result<Bytes, String>,
+) -> Response {
+    match body {
+        Ok(body) => (
+            status,
+            [(header::CONTENT_TYPE, HeaderValue::from_static(content_type))],
+            body,
+        )
+            .into_response(),
+        Err(err) => text_response(StatusCode::INTERNAL_SERVER_ERROR, err),
+    }
+}
+
+fn text_response(status: StatusCode, body: String) -> Response {
+    (
+        status,
+        [(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static(CONTENT_TYPE_TEXT),
+        )],
+        body,
+    )
+        .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::{Body, to_bytes};
+    use serde::{Deserialize, Serializer, ser::Error as _};
+
+    #[derive(Debug, Deserialize, PartialEq, Serialize)]
+    struct Payload {
+        value: String,
+    }
+
+    struct FailingSerialize;
+
+    impl Serialize for FailingSerialize {
+        fn serialize<S>(&self, _serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            Err(S::Error::custom("intentional serialize failure"))
+        }
+    }
+
+    async fn response_parts(response: Response) -> (StatusCode, HeaderMap, Bytes) {
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, headers, body)
+    }
+
+    #[test]
+    fn content_from_prefers_content_type_then_accept() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::ACCEPT, CONTENT_TYPE_CBOR.parse().unwrap());
+        headers.insert(header::CONTENT_TYPE, CONTENT_TYPE_JSON.parse().unwrap());
+        assert!(matches!(Content::from(&headers), Content::Json((), None)));
+
+        headers.insert(
+            header::CONTENT_TYPE,
+            "application/vnd.example+cbor".parse().unwrap(),
+        );
+        assert!(matches!(Content::from(&headers), Content::Cbor((), None)));
+
+        headers.remove(header::CONTENT_TYPE);
+        assert!(matches!(Content::from(&headers), Content::Cbor((), None)));
+
+        headers.insert(header::ACCEPT, CONTENT_TYPE_TEXT.parse().unwrap());
+        assert!(matches!(Content::from(&headers), Content::Text(_, None)));
+
+        headers.insert(header::ACCEPT, "application/xml".parse().unwrap());
+        assert!(matches!(Content::from(&headers), Content::Other(_, None)));
+
+        headers.clear();
+        assert!(matches!(Content::from(&headers), Content::Other(_, None)));
+    }
+
+    #[test]
+    fn content_type_parser_ignores_unsupported_or_invalid_values() {
+        let mut headers = HeaderMap::new();
+        headers.insert(header::CONTENT_TYPE, "text/json".parse().unwrap());
+        assert!(Content::from_content_type(&headers).is_none());
+
+        headers.insert(header::CONTENT_TYPE, "application/xml".parse().unwrap());
+        assert!(Content::from_content_type(&headers).is_none());
+
+        headers.insert(
+            header::CONTENT_TYPE,
+            "application/problem+json".parse().unwrap(),
+        );
+        assert!(matches!(
+            Content::from_content_type(&headers),
+            Some(Content::Json((), None))
+        ));
+
+        headers.insert(header::CONTENT_TYPE, "not a mime".parse().unwrap());
+        assert!(Content::from_content_type(&headers).is_none());
+    }
+
+    #[tokio::test]
+    async fn from_request_decodes_json_and_cbor() {
+        let payload = Payload {
+            value: "hello".to_string(),
+        };
+        let body = serde_json::to_vec(&payload).unwrap();
+        let request = Request::builder()
+            .header(header::CONTENT_TYPE, CONTENT_TYPE_JSON)
+            .body(Body::from(body))
+            .unwrap();
+
+        let parsed = Content::<Payload>::from_request(request, &())
+            .await
+            .unwrap();
+        assert!(matches!(parsed, Content::Json(_, None)));
+        if let Content::Json(value, None) = parsed {
+            assert_eq!(value, payload);
+        }
+
+        let mut body = Vec::new();
+        ciborium::into_writer(&payload, &mut body).unwrap();
+        let request = Request::builder()
+            .header(header::CONTENT_TYPE, CONTENT_TYPE_CBOR)
+            .body(Body::from(body))
+            .unwrap();
+
+        match Content::<Payload>::from_request(request, &())
+            .await
+            .unwrap()
+        {
+            Content::Cbor(value, None) => assert_eq!(value, payload),
+            other => panic!("unexpected content: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn from_request_rejects_bad_or_unsupported_bodies() {
+        let request = Request::builder()
+            .header(header::CONTENT_TYPE, CONTENT_TYPE_JSON)
+            .body(Body::from("{"))
+            .unwrap();
+        let response = Content::<Payload>::from_request(request, &())
+            .await
+            .unwrap_err();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let request = Request::builder()
+            .header(header::CONTENT_TYPE, CONTENT_TYPE_CBOR)
+            .body(Body::from(vec![0xff]))
+            .unwrap();
+        let response = Content::<Payload>::from_request(request, &())
+            .await
+            .unwrap_err();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+
+        let request = Request::builder().body(Body::empty()).unwrap();
+        let response = Content::<Payload>::from_request(request, &())
+            .await
+            .unwrap_err();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+    }
+
+    #[tokio::test]
+    async fn into_response_sets_status_headers_and_body() {
+        let payload = Payload {
+            value: "hello".to_string(),
+        };
+
+        let (status, headers, body) =
+            response_parts(Content::Json(&payload, Some(StatusCode::CREATED)).into_response())
+                .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_JSON);
+        assert_eq!(body, Bytes::from_static(br#"{"value":"hello"}"#));
+
+        let (status, headers, body) =
+            response_parts(Content::Cbor(&payload, Some(StatusCode::ACCEPTED)).into_response())
+                .await;
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_CBOR);
+        let decoded: Payload = ciborium::from_reader(body.as_ref()).unwrap();
+        assert_eq!(decoded, payload);
+
+        let (status, headers, body) = response_parts(
+            Content::<Payload>::Text("plain".to_string(), Some(StatusCode::IM_A_TEAPOT))
+                .into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::IM_A_TEAPOT);
+        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
+        assert_eq!(body, Bytes::from_static(b"plain"));
+
+        let (status, headers, body) = response_parts(
+            Content::<Payload>::Other("image/png".to_string(), None).into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
+        assert_eq!(
+            body,
+            Bytes::from_static(b"Unsupported MIME type: image/png")
+        );
+    }
+
+    #[tokio::test]
+    async fn into_response_reports_serialization_errors() {
+        let (status, headers, body) =
+            response_parts(Content::Json(FailingSerialize, None).into_response()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
+        assert_eq!(body, Bytes::from_static(b"intentional serialize failure"));
+
+        let (status, headers, body) =
+            response_parts(Content::Cbor(FailingSerialize, None).into_response()).await;
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("intentional serialize failure")
+        );
+    }
+
+    #[tokio::test]
+    async fn into_response_covers_owned_payload_and_marker_variants() {
+        let payload = Payload {
+            value: "owned".to_string(),
+        };
+
+        let (status, headers, body) =
+            response_parts(Content::Json(payload, None).into_response()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_JSON);
+        assert_eq!(body, Bytes::from_static(br#"{"value":"owned"}"#));
+
+        let payload = Payload {
+            value: "owned".to_string(),
+        };
+        let (status, headers, body) =
+            response_parts(Content::Cbor(payload, None).into_response()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_CBOR);
+        let decoded: Payload = ciborium::from_reader(body.as_ref()).unwrap();
+        assert_eq!(
+            decoded,
+            Payload {
+                value: "owned".to_string(),
+            }
+        );
+
+        let (status, headers, body) = response_parts(
+            Content::<FailingSerialize>::Text("fallback".to_string(), None).into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
+        assert_eq!(body, Bytes::from_static(b"fallback"));
+
+        let (status, headers, body) = response_parts(
+            Content::<FailingSerialize>::Other("application/octet-stream".to_string(), None)
+                .into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
+        assert_eq!(
+            body,
+            Bytes::from_static(b"Unsupported MIME type: application/octet-stream")
+        );
+
+        let (status, headers, body) =
+            response_parts(Content::<String>::Other("video/mp4".to_string(), None).into_response())
+                .await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
+        assert_eq!(
+            body,
+            Bytes::from_static(b"Unsupported MIME type: video/mp4")
+        );
     }
 }

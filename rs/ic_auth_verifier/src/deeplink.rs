@@ -275,4 +275,25 @@ mod tests {
         assert_eq!(response.action, "SignIn");
         assert_eq!(payload.value, "hello");
     }
+
+    #[test]
+    fn test_to_url_and_missing_payload_error() {
+        let endpoint = Url::parse("https://auth.example.com/start").unwrap();
+        let request = DeepLinkRequest {
+            os: "android",
+            action: "Open",
+            next_url: None,
+            payload: None::<Payload>,
+        };
+
+        let url = request.to_url(&endpoint);
+        let response = DeepLinkResponse::from_url(url).unwrap();
+
+        assert_eq!(response.os, "android");
+        assert_eq!(response.action, "Open");
+        assert_eq!(
+            response.get_payload::<Payload>().unwrap_err(),
+            "Payload is missing in the deep link response"
+        );
+    }
 }

@@ -5,9 +5,10 @@ use base64::{
 use candid::{CandidType, Principal};
 use ciborium::from_reader;
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName};
+#[cfg(feature = "identity")]
+use ic_auth_types::DelegationCompact;
 use ic_auth_types::{
-    ByteBufB64, DelegationCompact, SignedDelegation, SignedDelegationCompact,
-    deterministic_cbor_into_vec,
+    ByteBufB64, SignedDelegation, SignedDelegationCompact, deterministic_cbor_into_vec,
 };
 use ic_canister_sig_creation::delegation_signature_msg;
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,9 @@ use ic_agent::{Identity, Signature};
 
 use ic_canister_sig_creation::IC_ROOT_PK_DER;
 
-use crate::{Algorithm, sha3_256, user_public_key_from_der, verify_basic_sig, verify_canister_sig};
+#[cfg(feature = "identity")]
+use crate::sha3_256;
+use crate::{Algorithm, user_public_key_from_der, verify_basic_sig, verify_canister_sig};
 
 // pub use ic_signature_verification::verify_canister_sig;
 
@@ -704,12 +707,33 @@ impl From<SignedEnvelopeFull> for SignedEnvelope {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ciborium::value::Value;
-    use ic_agent::{Identity, identity::BasicIdentity};
-    use ic_canister_sig_creation::CanisterSigPublicKey;
-
+    #[cfg(feature = "identity")]
     use crate::unix_timestamp;
+    #[cfg(feature = "identity")]
+    use ciborium::value::Value;
+    #[cfg(feature = "identity")]
+    use ic_agent::{
+        Identity,
+        identity::{
+            BasicIdentity, DelegatedIdentity, Delegation as AgentDelegation,
+            SignedDelegation as AgentSignedDelegation,
+        },
+    };
+    use ic_auth_types::DelegationCompact;
+    use ic_canister_sig_creation::CanisterSigPublicKey;
+    #[cfg(feature = "identity")]
+    use std::time::Duration;
 
+    fn sample_envelope() -> SignedEnvelope {
+        SignedEnvelope {
+            pubkey: vec![1, 2, 3].into(),
+            signature: vec![4, 5, 6].into(),
+            digest: Some(vec![7, 8, 9].into()),
+            delegation: None,
+        }
+    }
+
+    #[cfg(feature = "identity")]
     #[test]
     fn test_envelope_with_ed25519() {
         let secret = [8u8; 32];
@@ -720,6 +744,7 @@ mod tests {
         let msg = b"hello world";
         let mut headers = HeaderMap::new();
         let se = SignedEnvelope::sign_message(&id, msg).unwrap();
+        assert_eq!(se.sender(), id.sender().unwrap());
         se.to_headers(&mut headers).unwrap();
 
         let mut se2 = SignedEnvelope::from_headers(&headers).unwrap();
@@ -745,8 +770,29 @@ mod tests {
             )
             .is_ok()
         );
+
+        let delegated = crate::delegated_basic_identity(&id, 3600 * 1000);
+        let se = SignedEnvelope::sign_message(&delegated, msg).unwrap();
+        assert_eq!(se.delegation.as_ref().unwrap().len(), 1);
+        assert!(
+            se.verify(unix_timestamp().as_millis() as u64, None, None)
+                .is_ok()
+        );
+
+        let sig = delegated.sign_arbitrary(digest.as_slice()).unwrap();
+        let se: SignedEnvelope = sig.try_into().unwrap();
+        assert_eq!(se.delegation.as_ref().unwrap().len(), 1);
+        assert!(
+            se.verify(
+                unix_timestamp().as_millis() as u64,
+                None,
+                Some(digest.as_slice())
+            )
+            .is_ok()
+        );
     }
 
+    #[cfg(feature = "identity")]
     #[test]
     fn test_envelope_with_ed25519_2() {
         // test data from ts/ic-auth/src/identity.test.ts
@@ -850,6 +896,301 @@ mod tests {
     }
 
     #[test]
+    fn test_base64_and_header_helpers_reject_invalid_input() {
+        assert!(decode_base64("%%%").is_err());
+
+        let mut headers = HeaderMap::new();
+        headers.insert(&HEADER_IC_AUTH_PUBKEY, "%%%".parse().unwrap());
+        assert_eq!(extract_data(&headers, &HEADER_IC_AUTH_PUBKEY), None);
+        assert!(SignedEnvelope::from_headers(&headers).is_none());
+        assert!(SignedEnvelope::from_authorization(&headers).is_none());
+
+        headers.insert(AUTHORIZATION, "Bearer token".parse().unwrap());
+        assert!(SignedEnvelope::from_authorization(&headers).is_none());
+        headers.insert(AUTHORIZATION, "ICP invalid".parse().unwrap());
+        assert!(SignedEnvelope::from_authorization(&headers).is_none());
+    }
+
+    #[test]
+    fn test_envelope_roundtrips_authorization_and_component_headers() {
+        let envelope = sample_envelope();
+        let bytes = envelope.to_bytes();
+
+        let decoded = SignedEnvelope::from_bytes(&bytes).unwrap();
+        assert_eq!(decoded.pubkey, envelope.pubkey);
+        assert_eq!(decoded.signature, envelope.signature);
+        assert_eq!(decoded.digest, envelope.digest);
+        assert!(SignedEnvelope::from_bytes(&[0xff]).is_err());
+
+        let encoded = envelope.to_base64();
+        let decoded = SignedEnvelope::from_base64(&encoded).unwrap();
+        assert_eq!(decoded.pubkey, envelope.pubkey);
+
+        let mut headers = HeaderMap::new();
+        envelope.to_authorization(&mut headers).unwrap();
+        let decoded = SignedEnvelope::from_authorization(&headers).unwrap();
+        assert_eq!(decoded.signature, envelope.signature);
+
+        let mut headers = HeaderMap::new();
+        envelope.to_headers(&mut headers).unwrap();
+        let decoded = SignedEnvelope::from_headers(&headers).unwrap();
+        assert_eq!(decoded.pubkey, envelope.pubkey);
+        assert_eq!(decoded.digest, envelope.digest);
+
+        headers.remove(&HEADER_IC_AUTH_CONTENT_DIGEST);
+        assert!(SignedEnvelope::from_headers(&headers).is_none());
+    }
+
+    #[test]
+    fn test_envelope_headers_with_delegation_roundtrip() {
+        let mut envelope = sample_envelope();
+        envelope.delegation = Some(vec![SignedDelegationCompact {
+            delegation: DelegationCompact {
+                pubkey: vec![9, 8, 7].into(),
+                expiration: u64::MAX,
+                targets: Some(vec![Principal::management_canister()]),
+            },
+            signature: vec![6, 5, 4].into(),
+        }]);
+
+        let mut headers = HeaderMap::new();
+        envelope.to_headers(&mut headers).unwrap();
+        let decoded = SignedEnvelope::from_headers(&headers).unwrap();
+
+        assert_eq!(decoded.delegation.unwrap().len(), 1);
+
+        headers.insert(&HEADER_IC_AUTH_DELEGATION, "%%%".parse().unwrap());
+        let decoded = SignedEnvelope::from_headers(&headers).unwrap();
+        assert!(decoded.delegation.is_none());
+    }
+
+    #[test]
+    fn test_full_envelope_conversions_roundtrip() {
+        let full = SignedEnvelopeFull {
+            pubkey: vec![1, 2, 3].into(),
+            signature: vec![4, 5, 6].into(),
+            digest: Some(vec![7, 8, 9].into()),
+            delegation: Some(vec![SignedDelegation {
+                delegation: ic_auth_types::Delegation {
+                    pubkey: vec![10, 11, 12].into(),
+                    expiration: 123,
+                    targets: Some(vec![Principal::management_canister()]),
+                },
+                signature: vec![13, 14, 15].into(),
+            }]),
+        };
+
+        let compact: SignedEnvelope = full.clone().into();
+        assert_eq!(compact.pubkey, full.pubkey);
+        assert_eq!(compact.signature, full.signature);
+        assert_eq!(compact.digest, full.digest);
+        assert_eq!(compact.delegation.as_ref().unwrap().len(), 1);
+
+        let full_again: SignedEnvelopeFull = compact.into();
+        assert_eq!(full_again.pubkey, full.pubkey);
+        assert_eq!(full_again.signature, full.signature);
+        assert_eq!(full_again.digest, full.digest);
+        assert_eq!(full_again.delegation.unwrap().len(), 1);
+    }
+
+    #[cfg(feature = "identity")]
+    #[test]
+    fn test_targeted_delegation_verification_paths() {
+        let user = BasicIdentity::from_raw_key(&[8u8; 32]);
+        let session = BasicIdentity::from_raw_key(&[9u8; 32]);
+        let target = Principal::management_canister();
+        let expiration = unix_timestamp()
+            .saturating_add(Duration::from_secs(3600))
+            .as_nanos() as u64;
+        let delegation = AgentDelegation {
+            pubkey: session.public_key().unwrap(),
+            expiration,
+            targets: Some(vec![target]),
+        };
+        let signature = user
+            .sign_delegation(&delegation)
+            .unwrap()
+            .signature
+            .unwrap();
+        let compact = SignedDelegationCompact {
+            delegation: DelegationCompact {
+                pubkey: delegation.pubkey.clone().into(),
+                expiration: delegation.expiration,
+                targets: delegation.targets.clone(),
+            },
+            signature: signature.clone().into(),
+        };
+
+        let user_pubkey = user.public_key().unwrap();
+        let session_pubkey = session.public_key().unwrap();
+        let now_ms = unix_timestamp().as_millis() as u64;
+        verify_delegation_chain(
+            &user_pubkey,
+            &session_pubkey,
+            std::slice::from_ref(&compact),
+            now_ms,
+            None,
+        )
+        .unwrap();
+        let err = verify_delegation_chain(
+            &user_pubkey,
+            b"wrong-session",
+            std::slice::from_ref(&compact),
+            now_ms,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("Last verified public key does not match session public key"));
+
+        let delegated = DelegatedIdentity::new_unchecked(
+            user_pubkey.clone(),
+            Box::new(session),
+            vec![AgentSignedDelegation {
+                delegation,
+                signature,
+            }],
+        );
+        let digest = sha3_256(b"targeted message");
+        let envelope = SignedEnvelope::sign_digest(&delegated, digest.to_vec()).unwrap();
+        envelope
+            .verify(now_ms, Some(target), Some(&digest))
+            .unwrap();
+    }
+
+    #[test]
+    fn test_signed_envelope_rejects_delegation_length_and_expiration() {
+        let delegation = SignedDelegationCompact {
+            delegation: DelegationCompact {
+                pubkey: vec![1, 2, 3].into(),
+                expiration: u64::MAX,
+                targets: None,
+            },
+            signature: vec![4, 5, 6].into(),
+        };
+        let envelope = SignedEnvelope {
+            pubkey: vec![7, 8, 9].into(),
+            signature: vec![10, 11, 12].into(),
+            digest: Some(vec![13, 14, 15].into()),
+            delegation: Some(vec![delegation; MAX_DELEGATION_CHAIN_LENGTH + 1]),
+        };
+        assert!(envelope.verify(0, None, Some(&[13, 14, 15])).is_err());
+        let err = envelope.verify(0, None, None).unwrap_err();
+        assert!(err.contains("Delegation chain length exceeds the limit"));
+
+        let envelope = SignedEnvelope {
+            pubkey: vec![7, 8, 9].into(),
+            signature: vec![10, 11, 12].into(),
+            digest: Some(vec![13, 14, 15].into()),
+            delegation: Some(vec![SignedDelegationCompact {
+                delegation: DelegationCompact {
+                    pubkey: vec![1, 2, 3].into(),
+                    expiration: 0,
+                    targets: None,
+                },
+                signature: vec![4, 5, 6].into(),
+            }]),
+        };
+        let err = envelope
+            .verify(PERMITTED_DRIFT_MS + 1, None, None)
+            .unwrap_err();
+        assert!(err.contains("Delegation has expired"));
+    }
+
+    #[test]
+    fn test_extract_user_defaults_to_anonymous() {
+        let mut headers = HeaderMap::new();
+        assert_eq!(extract_user(&headers), ANONYMOUS_PRINCIPAL);
+
+        headers.insert(
+            &HEADER_IC_AUTH_USER,
+            Principal::management_canister().to_text().parse().unwrap(),
+        );
+        assert_eq!(extract_user(&headers), Principal::management_canister());
+
+        headers.insert(&HEADER_IC_AUTH_USER, "not-a-principal".parse().unwrap());
+        assert_eq!(extract_user(&headers), ANONYMOUS_PRINCIPAL);
+    }
+
+    #[test]
+    fn test_verify_rejects_missing_and_mismatched_digest_before_signature() {
+        let envelope = SignedEnvelope {
+            pubkey: vec![1, 2, 3].into(),
+            signature: vec![4, 5, 6].into(),
+            digest: None,
+            delegation: None,
+        };
+
+        assert_eq!(
+            envelope.verify(0, None, None).unwrap_err(),
+            "No content digest provided for verification"
+        );
+
+        let mut envelope = sample_envelope();
+        let err = envelope.verify(0, None, Some(&[0])).unwrap_err();
+        assert_eq!(err, "Content digest does not match");
+
+        envelope.digest = None;
+        let err = envelope.verify(0, None, Some(&[7, 8, 9])).unwrap_err();
+        assert!(err.contains("DER encoding") || err.contains("ASN.1"));
+    }
+
+    #[test]
+    fn test_verify_rejects_delegation_target_mismatch() {
+        let envelope = SignedEnvelope {
+            pubkey: vec![1, 2, 3].into(),
+            signature: vec![4, 5, 6].into(),
+            digest: Some(vec![7, 8, 9].into()),
+            delegation: Some(vec![SignedDelegationCompact {
+                delegation: DelegationCompact {
+                    pubkey: vec![9, 8, 7].into(),
+                    expiration: u64::MAX,
+                    targets: Some(vec![Principal::management_canister()]),
+                },
+                signature: vec![6, 5, 4].into(),
+            }]),
+        };
+
+        let other = Principal::from_slice(&[1, 2, 3]);
+        let err = envelope.verify(0, Some(other), None).unwrap_err();
+        assert!(err.contains("is not in the delegation targets"));
+    }
+
+    #[test]
+    fn test_verify_delegation_chain_rejects_empty_and_invalid_chain() {
+        assert_eq!(
+            verify_delegation_chain(&[], &[], &[], 0, None).unwrap_err(),
+            "Delegation chain is empty"
+        );
+
+        let delegation = SignedDelegationCompact {
+            delegation: DelegationCompact {
+                pubkey: vec![1, 2, 3].into(),
+                expiration: u64::MAX,
+                targets: None,
+            },
+            signature: vec![4, 5, 6].into(),
+        };
+        let err = verify_delegation_chain(&[], &[9], &[delegation], 0, Some(&[])).unwrap_err();
+        assert!(!err.is_empty());
+    }
+
+    #[test]
+    fn test_verify_delegation_chain_rejects_expired_delegation() {
+        let delegation = SignedDelegationCompact {
+            delegation: DelegationCompact {
+                pubkey: vec![1, 2, 3].into(),
+                expiration: 0,
+                targets: None,
+            },
+            signature: vec![4, 5, 6].into(),
+        };
+        let err =
+            verify_delegation_chain(&[], &[1, 2, 3], &[delegation], PERMITTED_DRIFT_MS + 1, None)
+                .unwrap_err();
+        assert!(err.contains("Delegation has expired"));
+    }
+
+    #[test]
     fn test_verify_delegation_chain_rejects_too_many_delegations() {
         let delegation = SignedDelegationCompact {
             delegation: DelegationCompact {
@@ -865,8 +1206,8 @@ mod tests {
         assert!(err.contains("Delegation chain length exceeds the limit"));
     }
 
+    #[cfg(any())]
     #[test]
-    #[ignore]
     fn test_verify_delegation_chain() {
         let user_pubkey = hex::decode(
             "303C300C060A2B0601040183B8430102032C000A0000000000000007010116FB513D360579FA1102D36E3BC8D53FB966F3AC9F717842B2B54C227582D786",
@@ -904,5 +1245,15 @@ mod tests {
         );
         println!("Verification result: {:?}", rt);
         assert!(rt.is_ok(), "Delegation chain verification failed: {:?}", rt);
+
+        let err = verify_delegation_chain(
+            &user_pubkey,
+            b"wrong-session",
+            &delegations,
+            1746365411593,
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("Last verified public key does not match session public key"));
     }
 }

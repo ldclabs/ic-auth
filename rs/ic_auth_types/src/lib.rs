@@ -141,4 +141,55 @@ mod tests {
         let d1: Delegation = ciborium::from_reader(&data[..]).unwrap();
         assert_eq!(d, d1);
     }
+
+    #[test]
+    fn test_compact_conversion_and_candid_roundtrips() {
+        let delegation = Delegation {
+            pubkey: ByteBufB64(vec![1, 2, 3, 4]),
+            expiration: 99,
+            targets: Some(vec![Principal::management_canister()]),
+        };
+        let compact: DelegationCompact = delegation.clone().into();
+        assert_eq!(compact.pubkey, delegation.pubkey);
+        assert_eq!(compact.expiration, delegation.expiration);
+        assert_eq!(compact.targets, delegation.targets);
+        let expanded: Delegation = compact.clone().into();
+        assert_eq!(expanded, delegation);
+
+        let signed = SignedDelegation {
+            delegation,
+            signature: ByteBufB64(vec![5, 6, 7, 8]),
+        };
+        let compact_signed: SignedDelegationCompact = signed.clone().into();
+        assert_eq!(compact_signed.delegation, compact);
+        assert_eq!(compact_signed.signature, signed.signature);
+        let expanded_signed: SignedDelegation = compact_signed.into();
+        assert_eq!(expanded_signed, signed);
+
+        let sign_in = SignInResponse {
+            expiration: 123,
+            user_key: ByteBufB64(vec![9, 10]),
+            seed: ByteBufB64(vec![11, 12]),
+        };
+        let encoded = candid::encode_one(sign_in.clone()).unwrap();
+        let decoded: SignInResponse = candid::decode_one(&encoded).unwrap();
+        assert_eq!(decoded, sign_in);
+
+        let encoded = candid::encode_one(signed.clone()).unwrap();
+        let decoded: SignedDelegation = candid::decode_one(&encoded).unwrap();
+        assert_eq!(decoded, signed);
+    }
+
+    #[test]
+    fn test_candid_type_metadata_is_available() {
+        let types = [
+            Delegation::ty(),
+            SignedDelegation::ty(),
+            SignInResponse::ty(),
+            DelegationCompact::ty(),
+            SignedDelegationCompact::ty(),
+        ];
+
+        assert!(types.iter().all(|ty| !format!("{ty:?}").is_empty()));
+    }
 }

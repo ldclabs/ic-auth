@@ -1,4 +1,6 @@
-use axum::{BoxError, Router, http::StatusCode, response::IntoResponse, routing};
+use axum::{BoxError, http::StatusCode, response::IntoResponse};
+#[cfg(not(test))]
+use axum::{Router, routing};
 use candid::Principal;
 use ciborium::from_reader;
 use http::HeaderMap;
@@ -6,8 +8,12 @@ use ic_auth_types::{ByteArrayB64, ByteBufB64};
 use ic_auth_verifier::SignedEnvelope;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
-use structured_logger::{Builder, async_json::new_writer, get_env_level, unix_ms};
+use structured_logger::unix_ms;
+#[cfg(not(test))]
+use structured_logger::{Builder, async_json::new_writer, get_env_level};
+#[cfg(not(test))]
 use tokio::signal;
+#[cfg(not(test))]
 use tokio_util::sync::CancellationToken;
 
 mod content;
@@ -35,6 +41,7 @@ struct InfoOutput<'a> {
 }
 
 // cargo run -p ic_auth_verify_server
+#[cfg(not(test))]
 #[tokio::main]
 async fn main() -> Result<(), BoxError> {
     // Initialize structured logging with Json format
@@ -59,6 +66,7 @@ async fn main() -> Result<(), BoxError> {
     Ok(())
 }
 
+#[cfg(not(test))]
 pub async fn shutdown_signal(cancel_token: CancellationToken) {
     let ctrl_c = async {
         signal::ctrl_c()
@@ -117,6 +125,7 @@ async fn get_information(headers: HeaderMap) -> impl IntoResponse {
 
 /// POST /verify
 async fn post_verify(ct: Content<VerifyInput>) -> impl IntoResponse {
+    let wants_cbor = matches!(ct, Content::Cbor(_, _));
     let req = match &ct {
         Content::Cbor(req, _) => req,
         Content::Json(req, _) => req,
@@ -153,12 +162,196 @@ async fn post_verify(ct: Content<VerifyInput>) -> impl IntoResponse {
         user: Principal::self_authenticating(&signed_envelope.pubkey),
     };
 
-    match &ct {
-        Content::Cbor(_, _) => Content::Cbor(out, None),
-        Content::Json(_, _) => Content::Json(out, None),
-        _ => Content::Text(
-            "supported content types: application/json, application/cbor".into(),
-            Some(StatusCode::NOT_ACCEPTABLE),
-        ),
+    if wants_cbor {
+        Content::Cbor(out, None)
+    } else {
+        Content::Json(out, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+    use ic_auth_verifier::{BasicIdentity, Identity};
+
+    async fn response_parts(
+        response: axum::response::Response,
+    ) -> (StatusCode, HeaderMap, bytes::Bytes) {
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        (status, headers, body)
+    }
+
+    fn signed_verify_input() -> (VerifyInput, Principal) {
+        let identity = BasicIdentity::from_raw_key(&[8u8; 32]);
+        let envelope = SignedEnvelope::sign_message(&identity, b"hello world").unwrap();
+        let user = identity.sender().unwrap();
+        (
+            VerifyInput {
+                signed_envelope: envelope.to_bytes().into(),
+                expect_target: None,
+                expect_digest: None,
+            },
+            user,
+        )
+    }
+
+    #[tokio::test]
+    async fn get_information_returns_requested_format() {
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::ACCEPT, "application/json".parse().unwrap());
+        let (status, response_headers, body) =
+            response_parts(get_information(headers).await.into_response()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            response_headers[http::header::CONTENT_TYPE],
+            "application/json"
+        );
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["name"], APP_NAME);
+        assert_eq!(value["version"], APP_VERSION);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::ACCEPT, "application/cbor".parse().unwrap());
+        let (status, response_headers, body) =
+            response_parts(get_information(headers).await.into_response()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            response_headers[http::header::CONTENT_TYPE],
+            "application/cbor"
+        );
+        let value: std::collections::BTreeMap<String, String> =
+            ciborium::from_reader(body.as_ref()).unwrap();
+        assert_eq!(value["name"], APP_NAME);
+        assert_eq!(value["version"], APP_VERSION);
+
+        let (status, _, body) =
+            response_parts(get_information(HeaderMap::new()).await.into_response()).await;
+        assert_eq!(status, StatusCode::NOT_ACCEPTABLE);
+        assert_eq!(
+            body,
+            bytes::Bytes::from_static(
+                b"supported content types: application/json, application/cbor"
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn post_verify_accepts_valid_json_and_cbor() {
+        let (input, user) = signed_verify_input();
+
+        let (status, headers, body) = response_parts(
+            post_verify(Content::Json(input.clone(), None))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[http::header::CONTENT_TYPE], "application/json");
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["user"], user.to_text());
+
+        let (status, headers, body) = response_parts(
+            post_verify(Content::Cbor(input, None))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(headers[http::header::CONTENT_TYPE], "application/cbor");
+        let value: VerifyOutput = ciborium::from_reader(body.as_ref()).unwrap();
+        assert_eq!(value.user, user);
+    }
+
+    #[tokio::test]
+    async fn post_verify_rejects_unsupported_bad_and_unauthorized_inputs() {
+        let (status, _, _) = response_parts(
+            post_verify(Content::<VerifyInput>::Text("".to_string(), None))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_ACCEPTABLE);
+
+        let bad_cbor = VerifyInput {
+            signed_envelope: vec![0xff].into(),
+            expect_target: None,
+            expect_digest: None,
+        };
+        let (status, _, body) = response_parts(
+            post_verify(Content::Json(bad_cbor, None))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("failed to decode signed_envelope Cbor")
+        );
+
+        let (mut input, _) = signed_verify_input();
+        input.expect_digest = Some([0; 32].into());
+        let (status, _, body) = response_parts(
+            post_verify(Content::Json(input, None))
+                .await
+                .into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert!(
+            std::str::from_utf8(&body)
+                .unwrap()
+                .contains("Content digest does not match")
+        );
+    }
+
+    #[tokio::test]
+    async fn create_listener_accepts_ephemeral_address() {
+        assert_listener_or_permission("127.0.0.1:0").await;
+        assert_listener_or_permission("[::1]:0").await;
+    }
+
+    async fn assert_listener_or_permission(addr: &str) {
+        match create_reuse_port_listener(addr.parse().unwrap()).await {
+            Ok(listener) => assert!(listener.local_addr().unwrap().port() > 0),
+            Err(err) => {
+                if err
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|err| err.kind() == std::io::ErrorKind::PermissionDenied)
+                {
+                    return;
+                }
+                panic!("unexpected listener error for {addr}: {err}");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn content_other_responses_for_handler_output_types() {
+        let (status, headers, body) = response_parts(
+            Content::<InfoOutput<'_>>::Other("application/xml".to_string(), None).into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(headers[http::header::CONTENT_TYPE], "text/plain");
+        assert_eq!(
+            body,
+            bytes::Bytes::from_static(b"Unsupported MIME type: application/xml")
+        );
+
+        let (status, headers, body) = response_parts(
+            Content::<VerifyOutput>::Other("application/xml".to_string(), None).into_response(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
+        assert_eq!(headers[http::header::CONTENT_TYPE], "text/plain");
+        assert_eq!(
+            body,
+            bytes::Bytes::from_static(b"Unsupported MIME type: application/xml")
+        );
     }
 }

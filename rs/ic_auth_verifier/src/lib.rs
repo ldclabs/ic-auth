@@ -172,4 +172,60 @@ mod tests {
         let (alg, _pk) = user_public_key_from_der(&pk_der).unwrap();
         assert_eq!(alg, Algorithm::IcCanisterSignature);
     }
+
+    #[test]
+    fn hash_helpers_match_known_vectors() {
+        assert_eq!(
+            hex::encode(sha256(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+        assert_eq!(
+            hex::encode(sha3_256(b"abc")),
+            "3a985da74fe225b2045c172d6bd390bd855f086e3e9d525b46bfe24511431532"
+        );
+        assert_eq!(
+            hex::encode(keccak256(b"abc")),
+            "4e03657aea45a94fc7d47ba826c8d667c0d1e6e33a64a036ec44f58fa12d6c45"
+        );
+    }
+
+    #[test]
+    fn verify_basic_sig_rejects_invalid_inputs() {
+        assert_eq!(
+            verify_basic_sig(Algorithm::IcCanisterSignature, &[], MESSAGE, &[]).unwrap_err(),
+            "IcCanisterSignature is not supported for basic signature verification"
+        );
+
+        assert_eq!(
+            verify_basic_sig(Algorithm::Ed25519, &[0; 31], MESSAGE, &[]).unwrap_err(),
+            "Ed25519 public key must be 32 bytes long"
+        );
+
+        let id = BasicIdentity::from_raw_key(&[8u8; 32]);
+        let sig = id.sign_arbitrary(MESSAGE).unwrap();
+        let pk_der = id.public_key().unwrap();
+        let (alg, pk) = user_public_key_from_der(&pk_der).unwrap();
+        assert!(verify_basic_sig(alg.clone(), &pk, MESSAGE, &[]).is_err());
+        assert_eq!(
+            verify_basic_sig(alg, &pk, b"tampered", &sig.signature.unwrap()).unwrap_err(),
+            "Ed25519 signature verification failed"
+        );
+
+        let sk: [u8; 32] = rand_bytes();
+        let sk = p256::ecdsa::SigningKey::from_bytes(&sk.into()).unwrap();
+        let id = Prime256v1Identity::from_private_key(sk.into());
+        let pk_der = id.public_key().unwrap();
+        let (alg, pk) = user_public_key_from_der(&pk_der).unwrap();
+        assert!(verify_basic_sig(alg, &pk, MESSAGE, &[]).is_err());
+
+        let sk: [u8; 32] = rand_bytes();
+        let sk = k256::ecdsa::SigningKey::from_bytes(&sk.into()).unwrap();
+        let id = Secp256k1Identity::from_private_key(sk.into());
+        let pk_der = id.public_key().unwrap();
+        let (alg, pk) = user_public_key_from_der(&pk_der).unwrap();
+        assert!(verify_basic_sig(alg, &pk, MESSAGE, &[]).is_err());
+
+        assert!(verify_basic_sig(Algorithm::EcdsaP256, &[0], MESSAGE, &[]).is_err());
+        assert!(verify_basic_sig(Algorithm::EcdsaSecp256k1, &[0], MESSAGE, &[]).is_err());
+    }
 }

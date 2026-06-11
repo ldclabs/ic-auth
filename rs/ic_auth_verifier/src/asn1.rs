@@ -154,6 +154,7 @@ fn public_key_bytes(key_part: ASN1Block) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use simple_asn1::{BigInt, to_der};
 
     #[test]
     fn test_user_public_key_from_der() {
@@ -168,5 +169,104 @@ mod tests {
         println!("Algorithm: {algo:?}");
         assert_eq!(algo, Algorithm::Ed25519);
         assert_eq!(pk.len(), 32);
+    }
+
+    #[test]
+    fn test_user_public_key_from_der_rejects_malformed_data() {
+        assert!(
+            user_public_key_from_der(&[0xff])
+                .unwrap_err()
+                .contains("DER encoding")
+        );
+
+        let integer = hex::decode("020100").unwrap();
+        assert_eq!(
+            user_public_key_from_der(&integer).unwrap_err(),
+            "Expected an ASN.1 sequence"
+        );
+
+        let two_top_level_blocks = hex::decode("020100020101").unwrap();
+        assert_eq!(
+            user_public_key_from_der(&two_top_level_blocks).unwrap_err(),
+            "Expected exactly one ASN.1 block"
+        );
+
+        let empty_sequence = hex::decode("3000").unwrap();
+        let err = user_public_key_from_der(&empty_sequence).unwrap_err();
+        assert!(err.contains("DER encoding") || err == "Expected exactly two ASN.1 blocks");
+
+        let short_sequence = to_der(&ASN1Block::Sequence(
+            0,
+            vec![ASN1Block::Integer(0, BigInt::from(0))],
+        ))
+        .unwrap();
+        assert_eq!(
+            user_public_key_from_der(&short_sequence).unwrap_err(),
+            "Expected exactly two ASN.1 blocks"
+        );
+
+        let seq_with_integer_algorithm = hex::decode("3006020100030100").unwrap();
+        assert_eq!(
+            user_public_key_from_der(&seq_with_integer_algorithm).unwrap_err(),
+            "Expected algorithm identifier"
+        );
+
+        let valid_key = ASN1Block::BitString(0, 8, vec![1]);
+        let unexpected_algorithm_type = to_der(&ASN1Block::Sequence(
+            0,
+            vec![
+                ASN1Block::Sequence(0, vec![ASN1Block::Integer(0, BigInt::from(0))]),
+                valid_key.clone(),
+            ],
+        ))
+        .unwrap();
+        assert_eq!(
+            user_public_key_from_der(&unexpected_algorithm_type).unwrap_err(),
+            "Algorithm identifier has unexpected type"
+        );
+
+        let unexpected_algorithm_size = to_der(&ASN1Block::Sequence(
+            0,
+            vec![
+                ASN1Block::Sequence(
+                    0,
+                    vec![
+                        ASN1Block::ObjectIdentifier(0, oid!(1, 3, 101, 112)),
+                        ASN1Block::Null(0),
+                        ASN1Block::Null(0),
+                    ],
+                ),
+                valid_key,
+            ],
+        ))
+        .unwrap();
+        assert_eq!(
+            user_public_key_from_der(&unexpected_algorithm_size).unwrap_err(),
+            "Algorithm identifier has unexpected size"
+        );
+
+        assert!(
+            public_key_bytes(ASN1Block::Null(0))
+                .unwrap_err()
+                .contains("Expected BitString")
+        );
+    }
+
+    #[test]
+    fn test_user_public_key_from_der_rejects_unsupported_algorithm() {
+        let rsa_subject_public_key_info = hex::decode("300e300906052b0e03021a0500030100").unwrap();
+        assert!(
+            user_public_key_from_der(&rsa_subject_public_key_info)
+                .unwrap_err()
+                .contains("Unsupported algorithm")
+        );
+    }
+
+    #[test]
+    fn test_public_key_bytes_rejects_inconsistent_bit_length() {
+        assert_eq!(
+            public_key_bytes(ASN1Block::BitString(0, 7, vec![0])).unwrap_err(),
+            "Inconsistent key length"
+        );
     }
 }

@@ -112,3 +112,123 @@ fn hash_sha256(data: &[u8]) -> [u8; SHA256_DIGEST_LEN] {
     hash.update(data);
     <[u8; SHA256_DIGEST_LEN]>::from(hash.finalize())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ic_certification::{empty, labeled};
+
+    fn tagged_cbor<T: Serialize>(value: &T) -> Vec<u8> {
+        let mut out = vec![0xd9, 0xd9, 0xf7];
+        out.extend(serde_cbor::to_vec(value).unwrap());
+        out
+    }
+
+    fn canister_public_key() -> CanisterSigPublicKey {
+        let pk_der =
+            hex::decode("303c300c060a2b0601040183b8430102032c000a000000000000000101011f809d0136deeed8e0187447d20ac0e13e0201e1dede8c437eada3e8dc349f85")
+                .unwrap();
+        CanisterSigPublicKey::try_from(pk_der.as_slice()).unwrap()
+    }
+
+    #[test]
+    fn test_parse_cbor_helpers_reject_missing_or_invalid_tags() {
+        assert_eq!(
+            parse_signature_cbor(&[]).unwrap_err(),
+            "signature CBOR doesn't have a self-describing tag"
+        );
+        assert!(
+            parse_signature_cbor(&[0xd9, 0xd9, 0xf7, 0xff])
+                .unwrap_err()
+                .contains("failed to parse signature CBOR")
+        );
+
+        assert_eq!(
+            parse_certificate_cbor(&[]).unwrap_err(),
+            "certificate CBOR doesn't have a self-describing tag"
+        );
+        assert!(
+            parse_certificate_cbor(&[0xd9, 0xd9, 0xf7, 0xff])
+                .unwrap_err()
+                .contains("failed to parse certificate CBOR")
+        );
+    }
+
+    #[test]
+    fn test_check_sig_path_errors() {
+        let public_key = canister_public_key();
+        let signature = CanisterSignature {
+            certificate: ByteBuf::from(vec![]),
+            tree: empty(),
+        };
+        assert_eq!(
+            check_sig_path(&signature, &public_key, b"message").unwrap_err(),
+            "signature entry not found"
+        );
+
+        let seed_hash = hash_sha256(&public_key.seed);
+        let msg_hash = hash_sha256(b"message");
+        let signature = CanisterSignature {
+            certificate: ByteBuf::from(vec![]),
+            tree: labeled(
+                b"sig".to_vec(),
+                labeled(
+                    seed_hash.to_vec(),
+                    labeled(msg_hash.to_vec(), leaf(b"not-empty")),
+                ),
+            ),
+        };
+        assert_eq!(
+            check_sig_path(&signature, &public_key, b"message").unwrap_err(),
+            "signature entry is not an empty leaf"
+        );
+    }
+
+    #[test]
+    fn test_check_certified_data_errors() {
+        let public_key = canister_public_key();
+        let certificate = Certificate {
+            tree: empty(),
+            signature: vec![],
+            delegation: None,
+        };
+        let signature = CanisterSignature {
+            certificate: ByteBuf::from(tagged_cbor(&certificate)),
+            tree: empty(),
+        };
+        assert_eq!(
+            check_certified_data_and_get_certificate(&signature, &public_key.canister_id)
+                .unwrap_err(),
+            "certified_data entry not found"
+        );
+
+        let certificate = Certificate {
+            tree: labeled(
+                b"canister".to_vec(),
+                labeled(
+                    public_key.canister_id.as_slice().to_vec(),
+                    labeled(b"certified_data".to_vec(), leaf(b"mismatch")),
+                ),
+            ),
+            signature: vec![],
+            delegation: None,
+        };
+        let signature = CanisterSignature {
+            certificate: ByteBuf::from(tagged_cbor(&certificate)),
+            tree: empty(),
+        };
+        assert_eq!(
+            check_certified_data_and_get_certificate(&signature, &public_key.canister_id)
+                .unwrap_err(),
+            "certified_data doesn't match sig tree digest"
+        );
+    }
+
+    #[test]
+    fn test_hash_sha256_vector() {
+        assert_eq!(
+            hex::encode(hash_sha256(b"abc")),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+}

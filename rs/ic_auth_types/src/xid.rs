@@ -409,4 +409,83 @@ mod tests {
 
         assert!(err.to_string().contains("invalid length 13"));
     }
+
+    #[test]
+    fn test_xid_rejects_short_sequence() {
+        use serde::Deserializer as _;
+        use serde::de::value::{Error as ValueError, SeqDeserializer};
+
+        let bytes = vec![0u8; RAW_LEN - 1];
+        let deserializer = SeqDeserializer::<_, ValueError>::new(bytes.into_iter());
+        let err = deserializer
+            .deserialize_seq(deserialize::XidVisitor)
+            .unwrap_err();
+
+        assert!(err.to_string().contains("invalid length 11"));
+    }
+
+    #[test]
+    fn test_xid_public_api_and_error_paths() {
+        assert_eq!(Xid::from_str("short").unwrap_err(), "Invalid length: 5");
+        assert_eq!(
+            Xid::from_str("0000000000000000000w").unwrap_err(),
+            "Invalid character: w"
+        );
+        assert_eq!(
+            Xid::from_str("00000000000000000001").unwrap_err(),
+            "Invalid character: 1"
+        );
+
+        let raw = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let xid = Xid::try_from(raw.as_slice()).unwrap();
+        assert_eq!(xid.as_ref(), &raw);
+        assert_eq!(xid.deref(), &raw);
+        assert_eq!(xid.as_slice(), raw.as_slice());
+        assert!(!xid.is_empty());
+        assert!(Xid::default().is_empty());
+        assert!(EMPTY_XID.is_empty());
+        assert_eq!(
+            Xid::try_from(raw[..RAW_LEN - 1].as_ref()).unwrap_err(),
+            "Invalid length: 11"
+        );
+
+        let xid = Xid::try_from(raw.to_vec()).unwrap();
+        assert_eq!(xid.as_slice(), raw.as_slice());
+        assert_eq!(
+            Xid::try_from(raw[..RAW_LEN - 1].to_vec()).unwrap_err(),
+            "Invalid length: 11"
+        );
+
+        let dec = gen_dec();
+        assert_eq!(dec[b'0' as usize], 0);
+        assert_eq!(dec[b'9' as usize], 9);
+        assert_eq!(dec[b'a' as usize], 10);
+        assert_eq!(dec[b'v' as usize], 31);
+
+        #[cfg(feature = "xid")]
+        {
+            let generated = Xid::new();
+            assert!(!generated.is_empty());
+            let original = xid::Id(raw);
+            let wrapped: Xid = original.into();
+            assert_eq!(wrapped.as_slice(), raw.as_slice());
+            let back: xid::Id = wrapped.clone().into();
+            assert_eq!(back.0, raw);
+            assert_eq!(wrapped.xid().0, raw);
+        }
+    }
+
+    #[test]
+    fn test_xid_deserializes_exact_sequence() {
+        use serde::Deserializer as _;
+        use serde::de::value::{Error as ValueError, SeqDeserializer};
+
+        let raw = [1u8, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+        let deserializer = SeqDeserializer::<_, ValueError>::new(raw.into_iter());
+        let xid = deserializer
+            .deserialize_seq(deserialize::XidVisitor)
+            .unwrap();
+
+        assert_eq!(xid.as_slice(), raw.as_slice());
+    }
 }

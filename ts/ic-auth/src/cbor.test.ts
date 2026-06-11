@@ -4,6 +4,9 @@ import { compareBytes, deterministicEncode } from './cbor.js'
 
 describe('cbor', () => {
   it('compareBytes', () => {
+    const bytes = new Uint8Array([1, 2, 3])
+
+    assert.equal(compareBytes(bytes, bytes), 0)
     assert.equal(compareBytes(new Uint8Array(), new Uint8Array([1, 2, 3])), -1)
     assert.equal(compareBytes(new Uint8Array([1, 2, 3]), new Uint8Array()), 1)
     assert.equal(
@@ -33,6 +36,10 @@ describe('cbor', () => {
     assert.equal(
       compareBytes(new Uint8Array([1, 1, 3]), new Uint8Array([1, 2])),
       -1
+    )
+    assert.throws(
+      () => compareBytes([1, 2] as any, new Uint8Array([1, 2])),
+      /invalid arguments/
     )
   })
 

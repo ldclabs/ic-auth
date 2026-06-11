@@ -275,6 +275,7 @@ mod tests {
         let public_key = basic.public_key().unwrap();
 
         let atomic = AtomicIdentity::new(Box::new(basic));
+        assert_eq!(atomic.get().sender().unwrap(), principal);
         assert_eq!(atomic.sender().unwrap(), principal);
         assert_eq!(atomic.public_key().unwrap(), public_key);
         assert!(atomic.is_authenticated());
@@ -433,5 +434,60 @@ mod tests {
 
         // 过期时间应该在未来
         assert!(expiration > now);
+    }
+
+    #[test]
+    fn test_atomic_identity_forwards_signing_methods() {
+        let basic = new_basic_identity();
+        let atomic = AtomicIdentity::new(Box::new(basic));
+        let signature = atomic.sign_arbitrary(b"hello").unwrap();
+        assert!(signature.signature.unwrap().len() > 0);
+
+        let envelope = EnvelopeContent::Query {
+            ingress_expiry: unix_timestamp()
+                .saturating_add(Duration::from_secs(60))
+                .as_nanos() as u64,
+            sender: atomic.sender().unwrap(),
+            canister_id: Principal::management_canister(),
+            method_name: "status".to_string(),
+            arg: Vec::new(),
+            nonce: None,
+            sender_info: None,
+        };
+        let signature = atomic.sign(&envelope).unwrap();
+        assert!(signature.signature.unwrap().len() > 0);
+
+        let session = new_basic_identity();
+        let delegation = Delegation {
+            pubkey: session.public_key().unwrap(),
+            expiration: unix_timestamp()
+                .saturating_add(Duration::from_secs(60))
+                .as_nanos() as u64,
+            targets: Some(vec![Principal::management_canister()]),
+        };
+        let signature = atomic.sign_delegation(&delegation).unwrap();
+        assert!(signature.signature.unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_signed_delegation_from_types() {
+        let src = ic_auth_types::SignedDelegation {
+            delegation: ic_auth_types::Delegation {
+                pubkey: vec![1, 2, 3].into(),
+                expiration: 42,
+                targets: Some(vec![Principal::management_canister()]),
+            },
+            signature: vec![4, 5, 6].into(),
+        };
+
+        let converted = signed_delegation_from(src);
+
+        assert_eq!(converted.delegation.pubkey, vec![1, 2, 3]);
+        assert_eq!(converted.delegation.expiration, 42);
+        assert_eq!(
+            converted.delegation.targets,
+            Some(vec![Principal::management_canister()])
+        );
+        assert_eq!(converted.signature, vec![4, 5, 6]);
     }
 }

@@ -84,6 +84,36 @@ fn deterministic_value(value: Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde::{Serialize, Serializer, ser::Error as _};
+
+    struct ToggleSerialize(bool);
+
+    impl Serialize for ToggleSerialize {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: Serializer,
+        {
+            if self.0 {
+                Err(S::Error::custom("intentional serialize failure"))
+            } else {
+                serializer.serialize_unit()
+            }
+        }
+    }
+
+    fn tag_inner(value: Value) -> Option<Box<Value>> {
+        match value {
+            Value::Tag(_, inner) => Some(inner),
+            _ => None,
+        }
+    }
+
+    fn map_entries(value: Value) -> Option<Vec<(Value, Value)>> {
+        match value {
+            Value::Map(entries) => Some(entries),
+            _ => None,
+        }
+    }
 
     #[test]
     fn test_deterministic_value() {
@@ -112,5 +142,57 @@ mod tests {
         let data2 = deterministic_cbor_into_vec(&Value::Map(value2)).unwrap();
         println!("{}", hex::encode(&data2));
         assert_eq!(data1, data2);
+    }
+
+    #[test]
+    fn test_writer_helpers_and_tagged_values() {
+        let value = vec![
+            (Value::from("b"), Value::from(2)),
+            (Value::from("a"), Value::from(1)),
+        ];
+        let mut plain = Vec::new();
+        cbor_into(&Value::Map(value.clone()), &mut plain).unwrap();
+        assert_eq!(plain, cbor_into_vec(&Value::Map(value.clone())).unwrap());
+
+        let tagged = Value::Tag(24, Box::new(Value::Map(value.into_iter().rev().collect())));
+        let mut deterministic = Vec::new();
+        deterministic_cbor_into(&tagged, &mut deterministic).unwrap();
+        assert_eq!(deterministic, deterministic_cbor_into_vec(&tagged).unwrap());
+
+        let decoded: Value = ciborium::from_reader(deterministic.as_slice()).unwrap();
+        let inner = tag_inner(decoded).unwrap();
+        let entries = map_entries(*inner).unwrap();
+        assert_eq!(entries[0].0, Value::from("a"));
+        assert_eq!(entries[1].0, Value::from("b"));
+        assert!(tag_inner(Value::Null).is_none());
+        assert!(map_entries(Value::Null).is_none());
+    }
+
+    #[test]
+    fn test_helpers_return_serialize_errors() {
+        assert!(cbor_into_vec(&ToggleSerialize(false)).is_ok());
+        assert!(
+            cbor_into_vec(&ToggleSerialize(true))
+                .unwrap_err()
+                .contains("intentional")
+        );
+        assert!(cbor_into(&ToggleSerialize(false), Vec::new()).is_ok());
+        assert!(
+            cbor_into(&ToggleSerialize(true), Vec::new())
+                .unwrap_err()
+                .contains("intentional")
+        );
+        assert!(deterministic_cbor_into_vec(&ToggleSerialize(false)).is_ok());
+        assert!(
+            deterministic_cbor_into_vec(&ToggleSerialize(true))
+                .unwrap_err()
+                .contains("intentional")
+        );
+        assert!(deterministic_cbor_into(&ToggleSerialize(false), Vec::new()).is_ok());
+        assert!(
+            deterministic_cbor_into(&ToggleSerialize(true), Vec::new())
+                .unwrap_err()
+                .contains("intentional")
+        );
     }
 }
