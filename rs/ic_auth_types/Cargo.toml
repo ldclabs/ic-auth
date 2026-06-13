@@ -12,7 +12,7 @@ license.workspace = true
 [dependencies]
 base64 = { workspace = true }
 candid = { workspace = true }
-ciborium = { workspace = true }
+cbor2 = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 xid = { workspace = true, optional = true }

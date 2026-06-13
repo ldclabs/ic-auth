@@ -3,10 +3,9 @@ use base64::{
     engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
 };
 use candid::{CandidType, Principal};
-use ciborium::from_reader;
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName};
 use ic_auth_types::{
-    ByteBufB64, DelegationCompact, SignedDelegation, SignedDelegationCompact,
+    ByteBufB64, DelegationCompact, SignedDelegation, SignedDelegationCompact, cbor_from_slice,
     deterministic_cbor_into_vec,
 };
 use ic_canister_sig_creation::delegation_signature_msg;
@@ -214,7 +213,7 @@ impl SignedEnvelope {
     /// # Returns
     /// * `Result<Self, String>` - The decoded envelope or an error message
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, String> {
-        from_reader(bytes).map_err(|err| format!("failed to decode SignedEnvelope data: {err:?}"))
+        cbor_from_slice(bytes).map_err(|err| format!("failed to decode SignedEnvelope data: {err}"))
     }
 
     /// Encodes the SignedEnvelope into a base64url string.
@@ -398,7 +397,7 @@ impl SignedEnvelope {
         let delegation = match headers.get(&HEADER_IC_AUTH_DELEGATION) {
             Some(_) => {
                 let data = extract_data(headers, &HEADER_IC_AUTH_DELEGATION)?;
-                Some(from_reader(&data[..]).ok()?)
+                Some(cbor_from_slice(&data[..]).ok()?)
             }
             None => None,
         };
@@ -669,7 +668,7 @@ mod tests {
     #[cfg(feature = "identity")]
     use crate::unix_timestamp;
     #[cfg(feature = "identity")]
-    use ciborium::value::Value;
+    use cbor2::Value;
     #[cfg(feature = "identity")]
     use ic_agent::{
         Identity,

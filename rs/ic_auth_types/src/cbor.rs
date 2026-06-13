@@ -1,33 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
-// https://github.com/ldclabs/ciborium/blob/main/ciborium/src/value/canonical.rs
-
-use ciborium::value::Value;
-use serde::ser;
+use serde::{de::DeserializeOwned, ser};
 use std::io::Write;
 
 /// Serializes an object as CBOR into a new Vec<u8>
 pub fn cbor_into_vec<T: ?Sized + ser::Serialize>(value: &T) -> Result<Vec<u8>, String> {
-    let mut data = Vec::new();
-    ciborium::into_writer(value, &mut data).map_err(|err| format!("{err:?}"))?;
-    Ok(data)
+    cbor2::to_vec(value).map_err(|err| err.to_string())
 }
 
 /// Serializes an object as CBOR into a writer
 pub fn cbor_into<T: ?Sized + ser::Serialize, W: Write>(value: &T, w: W) -> Result<(), String> {
-    ciborium::into_writer(value, w).map_err(|err| format!("{err:?}"))?;
-    Ok(())
+    cbor2::to_writer(value, w).map_err(|err| err.to_string())
+}
+
+/// Deserializes one CBOR item from a byte slice.
+pub fn cbor_from_slice<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
+    match cbor2::from_slice(bytes) {
+        Ok(value) => Ok(value),
+        Err(primary) => {
+            let value =
+                cbor2::from_slice::<cbor2::Value>(bytes).map_err(|_| format!("{primary:?}"))?;
+            value.deserialized().map_err(|_| format!("{primary:?}"))
+        }
+    }
 }
 
 /// Serializes an object as CBOR into a new Vec<u8> using RFC 8949 Deterministic Encoding.
 pub fn deterministic_cbor_into_vec<T: ?Sized + ser::Serialize>(
     value: &T,
 ) -> Result<Vec<u8>, String> {
-    let value = Value::serialized(value).map_err(|err| format!("{err:?}"))?;
-
-    let value = deterministic_value(value)?;
-    let mut data = Vec::new();
-    ciborium::into_writer(&value, &mut data).map_err(|err| format!("{err:?}"))?;
-    Ok(data)
+    cbor2::to_canonical_vec(value).map_err(|err| err.to_string())
 }
 
 /// Serializes an object as CBOR into a writer using RFC 8949 Deterministic Encoding.
@@ -35,56 +36,15 @@ pub fn deterministic_cbor_into<T: ?Sized + ser::Serialize, W: Write>(
     value: &T,
     w: W,
 ) -> Result<(), String> {
-    let value = Value::serialized(value).map_err(|err| format!("{err:?}"))?;
-
-    let value = deterministic_value(value)?;
-    ciborium::into_writer(&value, w).map_err(|err| format!("{err:?}"))?;
-    Ok(())
-}
-
-fn deterministic_value(value: Value) -> Result<Value, String> {
-    match value {
-        Value::Map(entries) => {
-            let mut deterministic_entries: Vec<(Vec<u8>, (Value, Value))> =
-                Vec::with_capacity(entries.len());
-            for (k, v) in entries {
-                let k = deterministic_value(k)?;
-                let v = deterministic_value(v)?;
-                let b = cbor_into_vec(&k)?;
-                deterministic_entries.push((b, (k, v)));
-            }
-
-            // RFC 8949 Deterministic Encoding: The keys in every map MUST be sorted in the bytewise lexicographic order of their deterministic encodings.
-            deterministic_entries.sort_by(|(k1, _), (k2, _)| k1.cmp(k2));
-            Ok(Value::Map(
-                deterministic_entries.into_iter().map(|(_, v)| v).collect(),
-            ))
-        }
-        Value::Array(elements) => {
-            let mut deterministic_elements: Vec<Value> = Vec::with_capacity(elements.len());
-            for e in elements {
-                deterministic_elements.push(deterministic_value(e)?);
-            }
-            Ok(Value::Array(deterministic_elements))
-        }
-        Value::Tag(tag, inner_value) => {
-            // The tag itself is a u64; its representation is handled by the serializer.
-            // The inner value must be in canonical form.
-            Ok(Value::Tag(
-                tag,
-                Box::new(deterministic_value(*inner_value)?),
-            ))
-        }
-        // Other Value variants (Integer, Bytes, Text, Bool, Null, Float)
-        // are considered "canonical" in their structure.
-        _ => Ok(value),
-    }
+    cbor2::to_canonical_writer(value, w).map_err(|err| err.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde::{Serialize, Serializer, ser::Error as _};
+    use candid::Principal;
+    use cbor2::Value;
+    use serde::{Deserialize, Serialize, Serializer, ser::Error as _};
 
     struct ToggleSerialize(bool);
 
@@ -159,7 +119,7 @@ mod tests {
         deterministic_cbor_into(&tagged, &mut deterministic).unwrap();
         assert_eq!(deterministic, deterministic_cbor_into_vec(&tagged).unwrap());
 
-        let decoded: Value = ciborium::from_reader(deterministic.as_slice()).unwrap();
+        let decoded: Value = cbor2::from_slice(deterministic.as_slice()).unwrap();
         let inner = tag_inner(decoded).unwrap();
         let entries = map_entries(*inner).unwrap();
         assert_eq!(entries[0].0, Value::from("a"));
@@ -194,5 +154,21 @@ mod tests {
                 .unwrap_err()
                 .contains("intentional")
         );
+    }
+
+    #[test]
+    fn test_cbor_from_slice_handles_principal_bytes() {
+        #[derive(Debug, Deserialize, PartialEq, Serialize)]
+        struct PrincipalPayload {
+            principal: Principal,
+        }
+
+        let payload = PrincipalPayload {
+            principal: Principal::management_canister(),
+        };
+        let data = cbor_into_vec(&payload).unwrap();
+        let decoded: PrincipalPayload = cbor_from_slice(&data).unwrap();
+
+        assert_eq!(decoded, payload);
     }
 }

@@ -349,6 +349,7 @@ const fn gen_dec() -> [u8; 256] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cbor_from_slice;
     use candid::Principal;
     use serde::{Deserialize, Serialize};
 
@@ -385,14 +386,14 @@ mod tests {
         assert_eq!(t, t1);
 
         let mut data = Vec::new();
-        ciborium::into_writer(&t, &mut data).unwrap();
+        cbor2::to_writer(&t, &mut data).unwrap();
         println!("{}", hex::encode(&data));
         assert_eq!(
             data,
             hex::decode("a2667468726561644c000000000000000000000000697072696e636970616c4104")
                 .unwrap()
         );
-        let t1: Test = ciborium::from_reader(&data[..]).unwrap();
+        let t1: Test = cbor_from_slice(&data[..]).unwrap();
         assert_eq!(t, t1);
     }
 

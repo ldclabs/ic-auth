@@ -7,6 +7,7 @@ use http::{
     StatusCode,
     header::{self, HeaderMap, HeaderValue},
 };
+use ic_auth_types::cbor_from_slice;
 use serde::{Serialize, de::DeserializeOwned};
 
 pub static CONTENT_TYPE_CBOR: &str = "application/cbor";
@@ -85,7 +86,7 @@ where
                 let body = Bytes::from_request(req, state)
                     .await
                     .map_err(IntoResponse::into_response)?;
-                let value: T = ciborium::from_reader(&body[..]).map_err(|err| {
+                let value: T = cbor_from_slice(&body[..]).map_err(|err| {
                     Content::Text::<String>(err.to_string(), Some(StatusCode::BAD_REQUEST))
                         .into_response()
                 })?;
@@ -110,9 +111,8 @@ where
                     .map_err(|err| err.to_string()),
             ),
             Self::Cbor(v, c) => {
-                let mut buf = Vec::new();
-                let body = ciborium::into_writer(&v, &mut buf)
-                    .map(|()| Bytes::from(buf))
+                let body = cbor2::to_vec(&v)
+                    .map(Bytes::from)
                     .map_err(|err| err.to_string());
                 serialized_response(c.unwrap_or_default(), CONTENT_TYPE_CBOR, body)
             }
@@ -250,7 +250,7 @@ mod tests {
         }
 
         let mut body = Vec::new();
-        ciborium::into_writer(&payload, &mut body).unwrap();
+        cbor2::to_writer(&payload, &mut body).unwrap();
         let request = Request::builder()
             .header(header::CONTENT_TYPE, CONTENT_TYPE_CBOR)
             .body(Body::from(body))
@@ -310,7 +310,7 @@ mod tests {
                 .await;
         assert_eq!(status, StatusCode::ACCEPTED);
         assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_CBOR);
-        let decoded: Payload = ciborium::from_reader(body.as_ref()).unwrap();
+        let decoded: Payload = cbor_from_slice(body.as_ref()).unwrap();
         assert_eq!(decoded, payload);
 
         let (status, headers, body) = response_parts(
@@ -372,7 +372,7 @@ mod tests {
             response_parts(Content::Cbor(payload, None).into_response()).await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_CBOR);
-        let decoded: Payload = ciborium::from_reader(body.as_ref()).unwrap();
+        let decoded: Payload = cbor_from_slice(body.as_ref()).unwrap();
         assert_eq!(
             decoded,
             Payload {

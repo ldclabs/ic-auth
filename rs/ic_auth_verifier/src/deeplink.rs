@@ -1,5 +1,6 @@
-use ciborium::from_reader;
-use ic_auth_types::{ByteBufB64, SignedDelegationCompact, deterministic_cbor_into_vec};
+use ic_auth_types::{
+    ByteBufB64, SignedDelegationCompact, cbor_from_slice, deterministic_cbor_into_vec,
+};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use std::str::FromStr;
 
@@ -174,7 +175,7 @@ impl DeepLinkResponse {
     /// A `Result` containing either the deserialized payload or an error message
     pub fn get_payload<T: DeserializeOwned>(&self) -> Result<T, String> {
         match &self.payload {
-            Some(payload) => from_reader(payload.as_slice()).map_err(|err| format!("{err:?}")),
+            Some(payload) => cbor_from_slice(payload.as_slice()),
             None => Err("Payload is missing in the deep link response".to_string()),
         }
     }

@@ -2,9 +2,8 @@ use axum::{BoxError, http::StatusCode, response::IntoResponse};
 #[cfg(not(test))]
 use axum::{Router, routing};
 use candid::Principal;
-use ciborium::from_reader;
 use http::HeaderMap;
-use ic_auth_types::{ByteArrayB64, ByteBufB64};
+use ic_auth_types::{ByteArrayB64, ByteBufB64, cbor_from_slice};
 use ic_auth_verifier::SignedEnvelope;
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -135,7 +134,7 @@ async fn post_verify(ct: Content<VerifyInput>) -> impl IntoResponse {
     };
 
     let now_ms = unix_ms();
-    let signed_envelope: SignedEnvelope = match from_reader(req.signed_envelope.as_slice()) {
+    let signed_envelope: SignedEnvelope = match cbor_from_slice(req.signed_envelope.as_slice()) {
         Ok(se) => se,
         Err(err) => {
             return Content::Text(
@@ -217,7 +216,7 @@ mod tests {
             "application/cbor"
         );
         let value: std::collections::BTreeMap<String, String> =
-            ciborium::from_reader(body.as_ref()).unwrap();
+            cbor_from_slice(body.as_ref()).unwrap();
         assert_eq!(value["name"], APP_NAME);
         assert_eq!(value["version"], APP_VERSION);
 
@@ -255,7 +254,7 @@ mod tests {
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[http::header::CONTENT_TYPE], "application/cbor");
-        let value: VerifyOutput = ciborium::from_reader(body.as_ref()).unwrap();
+        let value: VerifyOutput = cbor_from_slice(body.as_ref()).unwrap();
         assert_eq!(value.user, user);
     }
 

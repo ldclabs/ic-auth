@@ -10,9 +10,9 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-ic_auth_types = { path = "../ic_auth_types", version = "0.8" }
+ic_auth_types = { path = "../ic_auth_types", version = "0.9" }
 candid = { workspace = true }
-ciborium = { workspace = true }
+cbor2 = { workspace = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true }
 serde_cbor = { workspace = true }

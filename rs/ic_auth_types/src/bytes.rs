@@ -881,6 +881,7 @@ mod deserialize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cbor_from_slice;
     use base64::prelude::BASE64_STANDARD;
     use candid::encode_one;
     use serde::de::Visitor as _;
@@ -917,10 +918,10 @@ mod tests {
         assert_eq!(t, t1);
 
         let mut data = Vec::new();
-        ciborium::into_writer(&t, &mut data).unwrap();
+        cbor2::to_writer(&t, &mut data).unwrap();
         println!("{}", hex::encode(&data));
         assert_eq!(data, hex::decode("a26161440102030461624401020304").unwrap());
-        let t1: Test = ciborium::from_reader(&data[..]).unwrap();
+        let t1: Test = cbor_from_slice(&data[..]).unwrap();
         assert_eq!(t, t1);
 
         let a = encode_one(vec![1u8, 2, 3, 4]).unwrap();
@@ -1035,8 +1036,8 @@ mod tests {
         assert_eq!(parsed, value);
 
         let mut data = Vec::new();
-        ciborium::into_writer(&value, &mut data).unwrap();
-        let parsed: S = ciborium::from_reader(&data[..]).unwrap();
+        cbor2::to_writer(&value, &mut data).unwrap();
+        let parsed: S = cbor_from_slice(&data[..]).unwrap();
         assert_eq!(parsed, value);
     }
 
