@@ -14,15 +14,27 @@ pub static CONTENT_TYPE_CBOR: &str = "application/cbor";
 pub static CONTENT_TYPE_JSON: &str = "application/json";
 pub static CONTENT_TYPE_TEXT: &str = "text/plain";
 
+/// Request or response body with the negotiated wire format.
+///
+/// The extractor accepts `application/json`, `application/cbor`, and structured
+/// syntax suffixes such as `application/problem+json` or
+/// `application/vnd.example+cbor`. Responses preserve the selected format and
+/// fall back to plain text for protocol or serialization errors.
 #[derive(Debug)]
 pub enum Content<T> {
+    /// JSON body and optional response status.
     Json(T, Option<StatusCode>),
+    /// CBOR body and optional response status.
     Cbor(T, Option<StatusCode>),
+    /// Plain text body and optional response status.
     Text(String, Option<StatusCode>),
+    /// Unsupported media type value and optional response status.
     Other(String, Option<StatusCode>),
 }
 
 impl Content<()> {
+    /// Infers the preferred content format from `Content-Type` first, then
+    /// `Accept`.
     pub fn from(headers: &HeaderMap) -> Self {
         if let Some(ct) = Self::from_content_type(headers) {
             return ct;
@@ -46,6 +58,7 @@ impl Content<()> {
         Content::Other("unknown".to_string(), None)
     }
 
+    /// Parses only the `Content-Type` header.
     pub fn from_content_type(headers: &HeaderMap) -> Option<Self> {
         if let Some(content_type) = headers.get(header::CONTENT_TYPE)
             && let Ok(content_type) = content_type.to_str()

@@ -617,20 +617,27 @@ pub fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
     .map_err(|err| format!("failed to decode base64 data: {err}"))
 }
 
-/// SignedEnvelopeFull is a full representation of the SignedEnvelope.
-/// It includes the full field names for serialization and deserialization.
+/// Full-name representation of [`SignedEnvelope`].
+///
+/// `SignedEnvelope` serializes with compact field names (`p`, `s`, `h`, `d`)
+/// for transport. This companion type is useful when an API boundary wants
+/// descriptive names while retaining aliases for compact payloads.
 #[derive(Clone, Debug, CandidType, Deserialize, Serialize)]
 pub struct SignedEnvelopeFull {
+    /// The DER public key of the user identity.
     #[serde(alias = "p")]
     pub pubkey: ByteBufB64,
 
+    /// The signature over the envelope digest.
     #[serde(alias = "s")]
     pub signature: ByteBufB64,
 
+    /// Optional digest that was signed by `signature`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(alias = "h")]
     pub digest: Option<ByteBufB64>,
 
+    /// Optional full-name delegation chain.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(alias = "d")]
     pub delegation: Option<Vec<SignedDelegation>>,

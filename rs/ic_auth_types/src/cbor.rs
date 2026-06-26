@@ -2,17 +2,29 @@
 use serde::{de::DeserializeOwned, ser};
 use std::io::Write;
 
-/// Serializes an object as CBOR into a new Vec<u8>
+/// Serializes a value as CBOR into a new `Vec<u8>`.
+///
+/// This uses the default `cbor2` encoder. Use
+/// [`deterministic_cbor_into_vec`] when the bytes are hashed, signed, or used
+/// as a stable wire-format fixture.
 pub fn cbor_into_vec<T: ?Sized + ser::Serialize>(value: &T) -> Result<Vec<u8>, String> {
     cbor2::to_vec(value).map_err(|err| err.to_string())
 }
 
-/// Serializes an object as CBOR into a writer
+/// Serializes a value as CBOR into a writer.
+///
+/// This is the streaming counterpart of [`cbor_into_vec`].
 pub fn cbor_into<T: ?Sized + ser::Serialize, W: Write>(value: &T, w: W) -> Result<(), String> {
     cbor2::to_writer(value, w).map_err(|err| err.to_string())
 }
 
 /// Deserializes one CBOR item from a byte slice.
+///
+/// The first pass uses typed `cbor2` deserialization. If that fails, the
+/// function decodes through [`cbor2::Value`] and then asks the value to
+/// deserialize into `T`. That fallback preserves IC/Candid-specific custom
+/// deserialization paths, including [`candid::Principal`], while keeping the
+/// call sites independent of the CBOR backend.
 pub fn cbor_from_slice<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
     match cbor2::from_slice(bytes) {
         Ok(value) => Ok(value),
@@ -24,14 +36,20 @@ pub fn cbor_from_slice<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
     }
 }
 
-/// Serializes an object as CBOR into a new Vec<u8> using RFC 8949 Deterministic Encoding.
+/// Serializes a value into a new `Vec<u8>` using RFC 8949 deterministic CBOR.
+///
+/// Deterministic encoding sorts map keys by the bytewise lexicographic order
+/// of their deterministic encodings, making the result suitable for hashes,
+/// signatures, and cross-language fixtures.
 pub fn deterministic_cbor_into_vec<T: ?Sized + ser::Serialize>(
     value: &T,
 ) -> Result<Vec<u8>, String> {
     cbor2::to_canonical_vec(value).map_err(|err| err.to_string())
 }
 
-/// Serializes an object as CBOR into a writer using RFC 8949 Deterministic Encoding.
+/// Serializes a value into a writer using RFC 8949 deterministic CBOR.
+///
+/// This is the streaming counterpart of [`deterministic_cbor_into_vec`].
 pub fn deterministic_cbor_into<T: ?Sized + ser::Serialize, W: Write>(
     value: &T,
     w: W,

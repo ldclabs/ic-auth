@@ -1,11 +1,23 @@
 import { Principal } from '@icp-sdk/core/principal'
 
+/**
+ * Full-name delegation record.
+ *
+ * A delegation authorizes `pubkey` to act for the previous identity in a chain
+ * until `expiration`, optionally restricted to `targets`.
+ */
 export interface Delegation {
+  /** Delegated-to DER public key. */
   pubkey: Uint8Array
+  /** Expiration timestamp in nanoseconds since the Unix epoch. */
   expiration: bigint
+  /** Optional canister targets for this delegation. */
   targets?: Principal[]
 }
 
+/**
+ * Converts either full or compact delegation data into full-name form.
+ */
 export function toDelegation(obj: Delegation | DelegationCompact): Delegation {
   if ('pubkey' in obj && 'expiration' in obj) {
     return obj
@@ -22,12 +34,18 @@ export function toDelegation(obj: Delegation | DelegationCompact): Delegation {
   return val
 }
 
+/**
+ * Compact delegation form used by IC-Auth CBOR/JSON payloads.
+ */
 export interface DelegationCompact {
   p: Uint8Array // pubkey
   e: bigint // expiration
   t?: Principal[] // targets
 }
 
+/**
+ * Converts either full or compact delegation data into compact form.
+ */
 export function toDelegationCompact(
   obj: Delegation | DelegationCompact
 ): DelegationCompact {
@@ -46,11 +64,19 @@ export function toDelegationCompact(
   return val
 }
 
+/**
+ * Full-name signed delegation record.
+ */
 export interface SignedDelegation {
+  /** Delegation payload that was signed. */
   delegation: Delegation
+  /** Signature over the delegation message. */
   signature: Uint8Array
 }
 
+/**
+ * Converts either full or compact signed delegation data into full-name form.
+ */
 export function toSignedDelegation(
   obj: SignedDelegation | SignedDelegationCompact
 ): SignedDelegation {
@@ -64,11 +90,17 @@ export function toSignedDelegation(
   }
 }
 
+/**
+ * Compact signed delegation form used by IC-Auth CBOR/JSON payloads.
+ */
 export interface SignedDelegationCompact {
   d: DelegationCompact // delegation
   s: Uint8Array // signature
 }
 
+/**
+ * Converts either full or compact signed delegation data into compact form.
+ */
 export function toSignedDelegationCompact(
   obj: SignedDelegation | SignedDelegationCompact
 ): SignedDelegationCompact {
@@ -82,11 +114,19 @@ export function toSignedDelegationCompact(
   }
 }
 
+/**
+ * Full-name deep-link sign-in request payload.
+ */
 export interface DeepLinkSignInRequest {
+  /** Session public key that should receive the returned delegation. */
   session_pubkey: Uint8Array
+  /** Maximum session lifetime in milliseconds. */
   max_time_to_live: bigint
 }
 
+/**
+ * Converts either full or compact sign-in request data into full-name form.
+ */
 export function toDeepLinkSignInRequest(
   obj: DeepLinkSignInRequest | DeepLinkSignInRequestCompact
 ): DeepLinkSignInRequest {
@@ -100,11 +140,17 @@ export function toDeepLinkSignInRequest(
   }
 }
 
+/**
+ * Compact deep-link sign-in request payload.
+ */
 export interface DeepLinkSignInRequestCompact {
   s: Uint8Array // session_pubkey
   m: bigint // max_time_to_live
 }
 
+/**
+ * Converts either full or compact sign-in request data into compact form.
+ */
 export function toDeepLinkSignInRequestCompact(
   obj: DeepLinkSignInRequest | DeepLinkSignInRequestCompact
 ): DeepLinkSignInRequestCompact {
@@ -118,13 +164,23 @@ export function toDeepLinkSignInRequestCompact(
   }
 }
 
+/**
+ * Full-name deep-link sign-in response payload.
+ */
 export interface DeepLinkSignInResponse {
+  /** User public key at the head of the delegation chain. */
   user_pubkey: Uint8Array
+  /** Delegations that authorize the requested session key. */
   delegations: SignedDelegation[]
+  /** Authentication method reported by the signer, such as `passkey`. */
   authn_method: string
+  /** Origin associated with the authentication request. */
   origin: string
 }
 
+/**
+ * Converts either full or compact sign-in response data into full-name form.
+ */
 export function toDeepLinkSignInResponse(
   obj: DeepLinkSignInResponse | DeepLinkSignInResponseCompact
 ): DeepLinkSignInResponse {
@@ -140,6 +196,9 @@ export function toDeepLinkSignInResponse(
   }
 }
 
+/**
+ * Compact deep-link sign-in response payload.
+ */
 export interface DeepLinkSignInResponseCompact {
   u: Uint8Array // user_pubkey
   d: SignedDelegation[] // delegations
@@ -147,6 +206,9 @@ export interface DeepLinkSignInResponseCompact {
   o: string // origin
 }
 
+/**
+ * Converts either full or compact sign-in response data into compact form.
+ */
 export function toDeepLinkSignInResponseCompact(
   obj: DeepLinkSignInResponse | DeepLinkSignInResponseCompact
 ): DeepLinkSignInResponseCompact {
@@ -162,13 +224,27 @@ export function toDeepLinkSignInResponseCompact(
   }
 }
 
+/**
+ * Full-name signed envelope.
+ *
+ * This is the TypeScript counterpart of Rust `SignedEnvelopeFull`. Compact
+ * payloads use `SignedEnvelopeCompact`.
+ */
 export interface SignedEnvelope {
+  /** DER public key for the identity at the head of the envelope. */
   pubkey: Uint8Array
+  /** Signature over `digest` or over the externally supplied digest. */
   signature: Uint8Array
+  /** Optional signed digest. */
   digest?: Uint8Array
+  /** Optional compact delegation chain. */
   delegation?: SignedDelegation[]
 }
 
+/**
+ * Converts compact, full-name, or legacy `public_key` envelope data into
+ * full-name form.
+ */
 export function toSignedEnvelope(
   obj: SignedEnvelope | SignedEnvelopeCompact
 ): SignedEnvelope {
@@ -209,6 +285,9 @@ export function toSignedEnvelope(
   return val
 }
 
+/**
+ * Compact signed envelope form used by deterministic CBOR signing.
+ */
 export interface SignedEnvelopeCompact {
   p: Uint8Array // pubkey | public_key
   s: Uint8Array // signature
@@ -216,6 +295,9 @@ export interface SignedEnvelopeCompact {
   d?: SignedDelegationCompact[] // delegation
 }
 
+/**
+ * Converts full-name or compact envelope data into compact form.
+ */
 export function toSignedEnvelopeCompact(
   obj: SignedEnvelope | SignedEnvelopeCompact
 ): SignedEnvelopeCompact {

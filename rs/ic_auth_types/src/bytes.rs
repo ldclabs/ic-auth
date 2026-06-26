@@ -311,7 +311,7 @@ impl<const N: usize> TryFrom<&[u8]> for ByteArrayB64<N> {
     }
 }
 
-/// Implements `TryFrom<Vec<u8>>` for `ByteArrayB64<N>` to allow checked conversion from a Vec<u8>.
+/// Implements `TryFrom<Vec<u8>>` for `ByteArrayB64<N>` to allow checked conversion from a `Vec<u8>`.
 impl<const N: usize> TryFrom<Vec<u8>> for ByteArrayB64<N> {
     type Error = Vec<u8>;
 
@@ -488,7 +488,7 @@ impl<'a> BytesB64<'a> {
         BytesB64(Cow::Owned(vec))
     }
 
-    /// Turn this into an owned Vec<u8>.
+    /// Turn this into an owned `Vec<u8>`.
     pub fn into_owned(self) -> Vec<u8> {
         self.0.into_owned()
     }

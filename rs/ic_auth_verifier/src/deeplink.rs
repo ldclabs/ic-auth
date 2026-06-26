@@ -36,10 +36,17 @@ use std::str::FromStr;
 /// ```
 #[derive(Debug)]
 pub struct DeepLinkRequest<'a, T: Serialize> {
-    pub os: &'a str,     // e.g., "linux" | "windows" | "macos" | "ios" | "android"
-    pub action: &'a str, // e.g., "SignIn"
-    pub next_url: Option<&'a str>, // e.g., "https://anda.ai/deeplink"
-    pub payload: Option<T>, // encode as base64url
+    /// Platform hint for the target app, for example `ios`, `android`,
+    /// `macos`, `windows`, or `linux`.
+    pub os: &'a str,
+    /// Action requested from the target app, for example `SignIn`.
+    pub action: &'a str,
+    /// Callback URL that the target app should open after completing the
+    /// action.
+    pub next_url: Option<&'a str>,
+    /// Optional payload serialized as deterministic CBOR and placed in the URL
+    /// fragment as Base64URL.
+    pub payload: Option<T>,
 }
 
 impl<T> DeepLinkRequest<'_, T>
@@ -118,10 +125,14 @@ where
 /// ```
 #[derive(Debug)]
 pub struct DeepLinkResponse {
+    /// Original callback URL.
     pub url: url::Url,
+    /// Platform hint parsed from the `os` query parameter.
     pub os: String,
-    pub action: String,              // "SignIn"
-    pub payload: Option<ByteBufB64>, // decode from base64url
+    /// Action parsed from the `action` query parameter.
+    pub action: String,
+    /// Optional CBOR payload decoded from the Base64URL fragment.
+    pub payload: Option<ByteBufB64>,
 }
 
 impl DeepLinkResponse {
@@ -192,10 +203,12 @@ impl DeepLinkResponse {
 /// * `max_time_to_live` - The maximum time-to-live for the session in milliseconds
 #[derive(Clone, Default, Deserialize, Serialize)]
 pub struct SignInRequest {
+    /// Session public key that should receive the delegation.
     #[serde(rename = "s")]
     pub session_pubkey: ByteBufB64,
+    /// Maximum delegation lifetime in milliseconds.
     #[serde(rename = "m")]
-    pub max_time_to_live: u64, // in milliseconds
+    pub max_time_to_live: u64,
 }
 
 /// Represents a SignIn response payload from authentication.
@@ -211,12 +224,17 @@ pub struct SignInRequest {
 /// * `origin` - The origin of the authentication request
 #[derive(Clone, Default, Deserialize, Serialize)]
 pub struct SignInResponse {
+    /// User public key at the head of the returned delegation chain.
     #[serde(rename = "u")]
     pub user_pubkey: ByteBufB64,
+    /// Delegations that authorize the requested session key.
     #[serde(rename = "d")]
     pub delegations: Vec<SignedDelegationCompact>,
+    /// Authentication method reported by the target app, for example
+    /// `passkey` or `webauthn`.
     #[serde(rename = "a")]
     pub authn_method: String,
+    /// Origin associated with the authentication request.
     #[serde(rename = "o")]
     pub origin: String,
 }

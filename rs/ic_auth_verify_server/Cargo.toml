@@ -1,6 +1,6 @@
 [package]
 name = "ic_auth_verify_server"
-description = "IC Auth Verifier Server"
+description = "HTTP JSON/CBOR service for verifying IC-Auth signed envelopes."
 repository = "https://github.com/ldclabs/ic-auth/tree/main/rs/ic_auth_verify_server"
 publish = false
 version.workspace = true

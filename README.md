@@ -4,111 +4,147 @@
 
 ## Overview
 
-IC-Auth is a comprehensive web authentication system based on the Internet Computer (ICP) identity. It provides a secure, decentralized approach to user authentication for web applications by leveraging the cryptographic capabilities of the Internet Computer.
+IC-Auth is a web authentication toolkit based on Internet Computer identities. It provides shared Rust/TypeScript wire types, deterministic CBOR signing helpers, signature and delegation-chain verification, and a small HTTP verifier service.
 
 ## Features
 
-- **Multiple Cryptographic Algorithms Support**:
+- **Multiple signature algorithms**:
   - Ed25519
   - ECDSA with secp256k1 curve
   - ECDSA with P-256 curve (secp256r1)
   - Internet Computer Canister Signatures
-- **Secure Authentication Flow**: Implements a secure delegation-based authentication system
-- **Cross-Platform Compatibility**: Works across different platforms and programming languages
-- **Lightweight Implementation**: Optimized for performance and minimal dependencies
-- **Standards Compliance**: Follows cryptographic best practices and standards
+- **Delegation-based authentication**: verifies delegation chains, expiration, and optional target canisters.
+- **Deterministic wire format**: uses RFC 8949 deterministic CBOR for payloads that are hashed or signed.
+- **Cross-language payloads**: Rust and TypeScript packages share compact `p`/`s`/`h`/`d` envelope forms.
+- **HTTP integration**: supports `Authorization: ICP ...`, `IC-Auth-*` headers, and JSON/CBOR verification requests.
 
 ## Components
 
 ### `ic_auth_types`
 
-A Rust library providing essential data structures and utilities for working with Internet Computer authentication.
+A Rust crate with the shared IC-Auth data model: delegation records, compact wire forms, Base64URL byte wrappers, XID identifiers, and CBOR helpers.
 
-#### Features
-
-- **Efficient Byte Handling**: Includes `ByteBufB64` and `ByteArrayB64` types for efficient serialization and deserialization of binary data with automatic Base64URL encoding for human-readable formats
-- **Unique Identifiers**: Provides `Xid` type, a compact and lexicographically sortable globally unique identifier (12 bytes vs UUID's 16 bytes)
-- **Authentication Primitives**: Includes types for delegations, signed delegations, and authentication responses
-- **Candid Compatibility**: All types implement `CandidType` for seamless integration with the Internet Computer
-- **Serde Support**: Full serialization/deserialization support for both human-readable (JSON) and binary formats (CBOR)
-- **RFC 8949 Deterministic Encoding**: Use `deterministic_cbor_into` and `deterministic_cbor_into_vec` to ensure consistent binary representation for cryptographic operations.
-
-#### Installation
+Install:
 
 ```toml
 [dependencies]
-ic_auth_types = "0.8"  # Replace with the latest version
+ic_auth_types = "0.9"
 ```
 
 With XID compatibility:
 
 ```toml
 [dependencies]
-ic_auth_types = { version = "0.8", features = ["full"] }
+ic_auth_types = { version = "0.9", features = ["xid"] }
 ```
 
 ### `ic_auth_verifier`
 
-A Rust library for signing and verifying cryptographic signatures in the IC-Auth ecosystem.
+A Rust crate for DER public-key parsing, raw signature verification, signed envelopes, delegation-chain verification, deep-link payloads, and optional `ic-agent` identity helpers.
 
-#### Features
-
-- **Signature Verification**: Verify signatures using multiple cryptographic algorithms
-- **Public Key Handling**: Parse and validate DER-encoded public keys
-- **Hashing Functions**: Compute various hash functions (SHA-256, SHA3-256, Keccak-256)
-- **Envelope Support**: Optional envelope functionality for secure message signing and verification
-
-#### Installation
+Install:
 
 ```toml
 [dependencies]
-ic_auth_verifier = "0.8"  # Replace with the latest version
+ic_auth_verifier = "0.9"
 ```
 
 With envelope support:
 
 ```toml
 [dependencies]
-ic_auth_verifier = { version = "0.8", features = ["envelope"] }
+ic_auth_verifier = { version = "0.9", features = ["envelope"] }
 ```
 
-With identity support (not for canisters; includes `envelope`):
+With identity support for native/server targets:
 
 ```toml
 [dependencies]
-ic_auth_verifier = { version = "0.8", features = ["full"] }
+ic_auth_verifier = { version = "0.9", features = ["full"] }
+```
+
+### `ic_auth_verify_server`
+
+A Rust HTTP service that verifies IC-Auth signed envelopes over JSON or CBOR.
+
+Run locally:
+
+```bash
+cargo run -p ic_auth_verify_server
+```
+
+The default listen address is `127.0.0.1:8080`; override it with `SOCKET_ADDR`.
+
+### `@ldclabs/ic-auth`
+
+A TypeScript client SDK for deterministic CBOR encoding, compact envelope/delegation types, Base64URL helpers, and message signing with `@icp-sdk/core` identities.
+
+Install:
+
+```bash
+npm install @ldclabs/ic-auth @icp-sdk/core @noble/hashes cborg
 ```
 
 ## Usage Examples
 
-### Basic Signing
+### Rust Envelope Signing
+
+```rust
+use ic_auth_verifier::{BasicIdentity, SignedEnvelope};
+
+fn main() -> Result<(), String> {
+    let identity = BasicIdentity::from_raw_key(&[8u8; 32]);
+    let message = b"message";
+    let envelope = SignedEnvelope::sign_message(&identity, message)?;
+
+    // Add the envelope to an `Authorization: ICP ...` header, or split it into
+    // `IC-Auth-*` component headers.
+    // envelope.to_authorization(&mut headers)?;
+    // envelope.to_headers(&mut headers)?;
+
+    Ok(())
+}
+```
+
+### Rust Envelope Verification
 
 ```rust
 use ic_auth_verifier::SignedEnvelope;
+use std::time::{SystemTime, UNIX_EPOCH};
 
-let identity = /* your ICP Identity */;
+fn verify(headers: &http::HeaderMap) -> Result<(), String> {
+    let envelope = SignedEnvelope::from_authorization(headers)
+        .ok_or_else(|| "missing IC-Auth envelope".to_string())?;
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|err| err.to_string())?
+        .as_millis() as u64;
 
-let message = b"message";
-let envelope = SignedEnvelope::sign_message(&identity, message)?;
-// Adds the SignedEnvelope to the Authorization header to be sent to the service
-envelope.to_authorization(&mut headers)?;
-// Or adds the SignedEnvelope components to the IC-Auth-* HTTP headers
-// envelope.to_headers(&mut headers)?;
+    envelope.verify(now_ms, None, None)
+}
 ```
 
-### Basic Verification
+### TypeScript Signing
 
-```rust
-use ic_auth_verifier::{SignedEnvelope, unix_ms};
+```typescript
+import {
+  Ed25519KeyIdentity,
+  bytesToBase64Url,
+  deterministicEncode,
+  signMessage,
+  toDelegationIdentity
+} from '@ldclabs/ic-auth'
 
-let envelope = SignedEnvelope::from_authorization(&headers).unwrap();
-// Verify the envelope
-envelope.verify(unix_ms(), None, None)?;
+const identity = toDelegationIdentity(Ed25519KeyIdentity.generate())
+const envelope = await signMessage(identity, new Map([['challenge', 'login']]))
+const token = bytesToBase64Url(deterministicEncode(envelope))
 ```
 
 ## Documentation
 
-- [API Documentation](https://docs.rs/ic_auth_verifier)
+- [ic_auth_types API Documentation](https://docs.rs/ic_auth_types)
+- [ic_auth_verifier API Documentation](https://docs.rs/ic_auth_verifier)
+- [@ldclabs/ic-auth on npm](https://www.npmjs.com/package/@ldclabs/ic-auth)
 - [Internet Computer Developer Documentation](https://internetcomputer.org/docs/current/developer-docs/)
 
 ## Related Projects
@@ -122,6 +158,6 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ## License
 
-Copyright © 2024-2025 [LDC Labs](https://github.com/ldclabs).
+Copyright © 2024-2026 [LDC Labs](https://github.com/ldclabs).
 
 `ldclabs/ic-auth` is licensed under the MIT License. See [LICENSE](LICENSE) for the full license text.

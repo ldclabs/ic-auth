@@ -1,3 +1,28 @@
+//! Verification and signing utilities for IC-Auth.
+//!
+//! The base crate verifies raw signatures for the public key formats used by
+//! Internet Computer identities: Ed25519, ECDSA P-256, ECDSA secp256k1, and IC
+//! canister signatures. Optional features add higher-level protocol surfaces:
+//!
+//! - `envelope`: [`SignedEnvelope`] parsing, verification, HTTP headers, and
+//!   deep-link payload helpers.
+//! - `identity`: `ic-agent` identity helpers for clients and services that
+//!   need to sign envelopes. This feature is intended for native/server
+//!   targets, not canisters.
+//!
+//! # Examples
+//!
+//! ```
+//! use ic_auth_verifier::{Algorithm, sha256, verify_basic_sig};
+//!
+//! let digest = sha256(b"message");
+//! assert_eq!(digest.len(), 32);
+//!
+//! let err = verify_basic_sig(Algorithm::IcCanisterSignature, &[], b"message", &[])
+//!     .unwrap_err();
+//! assert!(err.contains("not supported"));
+//! ```
+
 use k256::ecdsa::signature::hazmat::PrehashVerifier;
 use sha3::Digest;
 
@@ -30,6 +55,16 @@ pub use deeplink::*;
 #[cfg(feature = "identity")]
 pub use identity::*;
 
+/// Verifies a raw signature for non-canister public keys.
+///
+/// `public_key` must be the algorithm-specific raw public key bytes returned by
+/// [`user_public_key_from_der`], not the DER SubjectPublicKeyInfo wrapper. For
+/// ECDSA variants the function hashes `msg` with SHA-256 and verifies the
+/// resulting prehash, matching `ic-agent` arbitrary-message signatures.
+///
+/// IC canister signatures require certificate verification and should be
+/// handled with `verify_sig` or `verify_sig_with_rootkey` from the `envelope`
+/// feature instead.
 pub fn verify_basic_sig(
     algorithm_id: Algorithm,
     public_key: &[u8],
@@ -74,18 +109,21 @@ pub fn verify_basic_sig(
     }
 }
 
+/// Computes SHA-256 for `data`.
 pub fn sha256(data: &[u8]) -> [u8; 32] {
     let mut hasher = sha2::Sha256::new();
     hasher.update(data);
     hasher.finalize().into()
 }
 
+/// Computes SHA3-256 for `data`.
 pub fn sha3_256(data: &[u8]) -> [u8; 32] {
     let mut hasher = sha3::Sha3_256::new();
     hasher.update(data);
     hasher.finalize().into()
 }
 
+/// Computes Keccak-256 for `data`.
 pub fn keccak256(data: &[u8]) -> [u8; 32] {
     let mut hasher = sha3::Keccak256::new();
     hasher.update(data);
@@ -93,6 +131,7 @@ pub fn keccak256(data: &[u8]) -> [u8; 32] {
 }
 
 #[cfg(feature = "identity")]
+/// Returns `N` cryptographically random bytes.
 pub fn rand_bytes<const N: usize>() -> [u8; N] {
     use rand::Rng;
 

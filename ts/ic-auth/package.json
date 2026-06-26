@@ -2,7 +2,7 @@
   "name": "@ldclabs/ic-auth",
   "version": "0.4.2",
   "type": "module",
-  "description": "The Typescript version of the client SDK for the IC Auth.",
+  "description": "TypeScript client SDK for IC-Auth identities, deterministic CBOR signing, and compact envelope types.",
   "license": "MIT",
   "homepage": "https://github.com/ldclabs/ic-auth/tree/main/ts/ic-auth",
   "repository": {

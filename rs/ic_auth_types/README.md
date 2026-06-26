@@ -1,4 +1,5 @@
 # `ic_auth_types`
+
 ![License](https://img.shields.io/crates/l/ic_auth_types.svg)
 [![Crates.io](https://img.shields.io/crates/d/ic_auth_types.svg)](https://crates.io/crates/ic_auth_types)
 [![Test](https://github.com/ldclabs/ic-auth/actions/workflows/test.yml/badge.svg)](https://github.com/ldclabs/ic-auth/actions/workflows/test.yml)
@@ -7,36 +8,67 @@
 
 [IC-Auth](https://github.com/ldclabs/ic-auth) is a web authentication system based on the Internet Computer.
 
-`ic_auth_types` is a Rust types library used for integrating with IC-Auth. It provides essential data structures and utilities for working with Internet Computer authentication.
+`ic_auth_types` provides the shared Rust data model for IC-Auth: delegation records, compact wire forms, Base64URL byte wrappers, XID identifiers, and CBOR helpers used by signers and verifiers.
 
 ## Features
 
-- **Efficient Byte Handling**: Includes `ByteBufB64`, `ByteArrayB64`, and `BytesB64` types for efficient serialization and deserialization of binary data with automatic Base64URL encoding for human-readable formats.
-- **Unique Identifiers**: Provides `Xid` type, a compact and lexicographically sortable globally unique identifier (12 bytes vs UUID's 16 bytes).
-- **Authentication Primitives**: Includes types for delegations, signed delegations, and authentication responses.
-- **Candid Compatibility**: All types implement `CandidType` for seamless integration with the Internet Computer.
-- **Serde Support**: Full serialization/deserialization support for both human-readable (JSON) and binary formats (CBOR).
-- **RFC 8949 Deterministic Encoding**: Use `deterministic_cbor_into` and `deterministic_cbor_into_vec` to ensure consistent binary representation for cryptographic operations.
+- `Delegation`, `SignedDelegation`, `SignInResponse`, and compact `p`/`e`/`t` wire forms.
+- `ByteBufB64`, `ByteArrayB64`, and `BytesB64` for binary fields that become Base64URL strings in JSON and byte strings in CBOR.
+- `Xid`, a compact 12-byte, lexicographically sortable identifier with optional interoperability with the `xid` crate.
+- `CandidType` and Serde support for IC canister interfaces, JSON APIs, and CBOR payloads.
+- `cbor_into_vec`, `cbor_from_slice`, and deterministic RFC 8949 CBOR helpers for signed or hashed payloads.
 
-## Usage
+## Installation
 
 Add this to your `Cargo.toml`:
+
 ```toml
 [dependencies]
-ic_auth_types = "0.8"
+ic_auth_types = "0.9"
 ```
 
-Enables interoperability with the original `xid` crate:
+Enable interoperability with the original `xid` crate:
+
 ```toml
 [dependencies]
-ic_auth_types = { version = "0.8", features = ["xid"] }
+ic_auth_types = { version = "0.9", features = ["xid"] }
 ```
+
+## Example
+
+```rust
+use candid::Principal;
+use ic_auth_types::{
+    ByteBufB64, Delegation, DelegationCompact, deterministic_cbor_into_vec,
+};
+
+fn main() -> Result<(), String> {
+    let delegation = Delegation {
+        pubkey: ByteBufB64::from(vec![1, 2, 3]),
+        expiration: 1_900_000_000_000_000_000,
+        targets: Some(vec![Principal::management_canister()]),
+    };
+
+    let compact: DelegationCompact = delegation.into();
+    let bytes = deterministic_cbor_into_vec(&compact)?;
+    assert!(!bytes.is_empty());
+
+    Ok(())
+}
+```
+
+## Feature Flags
+
+- `default`: no optional dependencies.
+- `xid`: enables conversion to and from `xid::Id`.
+- `full`: currently aliases `xid`.
 
 ## Related Crates
 
-- [`ic_auth_verifier`](https://crates.io/crates/ic_auth_verifier): Provides verification functionality for IC-Auth signatures.
+- [`ic_auth_verifier`](https://crates.io/crates/ic_auth_verifier): signature, envelope, delegation-chain, and deep-link verification utilities.
 
 ## License
-Copyright © 2024-2025 [LDC Labs](https://github.com/ldclabs).
+
+Copyright © 2024-2026 [LDC Labs](https://github.com/ldclabs).
 
 `ldclabs/ic-auth` is licensed under the MIT License. See [LICENSE](../../LICENSE) for the full license text.

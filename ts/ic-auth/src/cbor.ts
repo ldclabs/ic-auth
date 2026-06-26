@@ -2,11 +2,23 @@ import { encode, rfc8949EncodeOptions } from 'cborg'
 
 export { decode, encode, rfc8949EncodeOptions } from 'cborg'
 
-// RFC 8949 Deterministic Encoding: The keys in every map MUST be sorted in the bytewise lexicographic order of their deterministic encodings.
+/**
+ * Encodes data using RFC 8949 deterministic CBOR.
+ *
+ * Deterministic encoding sorts map keys by the bytewise lexicographic order of
+ * their deterministic encodings. Use this before hashing or signing IC-Auth
+ * payloads so Rust and TypeScript produce the same bytes.
+ */
 export function deterministicEncode(data: any): Uint8Array {
   return encode(data, rfc8949EncodeOptions)
 }
 
+/**
+ * Compares two byte arrays in lexicographic order.
+ *
+ * Returns `-1`, `0`, or `1`, matching the ordering rule used by
+ * deterministic CBOR map keys.
+ */
 export function compareBytes(a: Uint8Array, b: Uint8Array): number {
   if (!(a instanceof Uint8Array) || !(b instanceof Uint8Array)) {
     throw new Error('ic-auth: compareBytes: invalid arguments')

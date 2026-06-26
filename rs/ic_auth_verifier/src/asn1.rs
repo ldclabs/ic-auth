@@ -3,17 +3,27 @@
 use serde::{Deserialize, Serialize};
 use simple_asn1::{ASN1Block, OID, from_der, oid};
 
+/// Public-key algorithms recognized in IC identity DER public keys.
 #[allow(non_camel_case_types)]
 #[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
 #[serde(rename_all = "snake_case")]
 pub enum Algorithm {
+    /// Internet Computer canister signature public key.
     IcCanisterSignature,
+    /// Ed25519 public key.
     Ed25519,
+    /// ECDSA over the NIST P-256 curve, also known as secp256r1.
     EcdsaP256,
+    /// ECDSA over the secp256k1 curve.
     EcdsaSecp256k1,
 }
 
-/// Parses the given `data` as a DER-encoded public key
+/// Parses a DER SubjectPublicKeyInfo public key.
+///
+/// Returns the recognized algorithm and the raw public key bytes that should be
+/// passed to the matching verifier. IC canister signatures keep the DER public
+/// key for certificate-path verification; basic signatures use the extracted
+/// curve/key bytes.
 pub fn user_public_key_from_der(data: &[u8]) -> Result<(Algorithm, Vec<u8>), String> {
     let mut parts = from_der(data).map_err(|err| format!("Error in DER encoding: {err}"))?;
     if parts.len() != 1 {

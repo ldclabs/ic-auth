@@ -1,5 +1,6 @@
 // Source code: https://github.com/kazk/xid-rs/blob/main/src/id.rs
-// We canot use it in wasm32-unknown-unknown, so we need to copy the code here.
+// The upstream generator is not usable in wasm32-unknown-unknown, so this
+// crate keeps the wire-compatible identifier type locally.
 
 use candid::CandidType;
 use core::{
@@ -18,7 +19,7 @@ const ENC: &[u8] = "0123456789abcdefghijklmnopqrstuv".as_bytes();
 const DEC: [u8; 256] = gen_dec();
 
 /// Represents a unique identifier with 12 bytes.
-/// Based on the xid. See: https://github.com/rs/xid
+/// Based on the xid. See: <https://github.com/rs/xid>
 ///
 /// XID is a globally unique identifier similar to UUID, but uses a more compact
 /// representation (12 bytes vs 16 bytes) and is lexicographically sortable.
@@ -124,11 +125,11 @@ impl TryFrom<&[u8]> for Xid {
     }
 }
 
-/// Implements conversion from a Vec<u8> to Xid
+/// Implements conversion from a `Vec<u8>` to Xid
 impl TryFrom<Vec<u8>> for Xid {
     type Error = String;
 
-    /// Tries to create an Xid from a Vec<u8>
+    /// Tries to create an Xid from a `Vec<u8>`
     ///
     /// # Arguments
     ///

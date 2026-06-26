@@ -11,7 +11,7 @@ pub const MAX_CERT_TIME_OFFSET_NS: u128 = 47 * 24 * 3600 * 1_000_000_000; // 47 
 use ic_canister_sig_creation::CanisterSigPublicKey;
 
 /// Verifies that `signature` is a valid canister signature on `message`.
-/// https://internetcomputer.org/docs/current/references/ic-interface-spec#canister-signatures
+/// <https://internetcomputer.org/docs/current/references/ic-interface-spec#canister-signatures>
 pub fn verify_canister_sig(
     message: &[u8],
     signature_cbor: &[u8],

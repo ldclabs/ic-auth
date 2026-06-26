@@ -1,3 +1,14 @@
+//! HTTP verification service for IC-Auth signed envelopes.
+//!
+//! The server exposes a small JSON/CBOR API:
+//!
+//! - `GET /` returns service name and version.
+//! - `POST /verify` verifies a CBOR-encoded [`SignedEnvelope`] embedded in a
+//!   JSON or CBOR request body and returns the authenticated principal.
+//!
+//! Set `SOCKET_ADDR` to change the listen address. The default is
+//! `127.0.0.1:8080`.
+
 use axum::{BoxError, http::StatusCode, response::IntoResponse};
 #[cfg(not(test))]
 use axum::{Router, routing};
@@ -21,19 +32,26 @@ const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 #[derive(Clone, Deserialize, Serialize)]
 struct VerifyInput {
+    /// Deterministic-CBOR encoded `SignedEnvelope`.
     signed_envelope: ByteBufB64,
+    /// Optional canister target that every targeted delegation must authorize.
     expect_target: Option<Principal>,
+    /// Optional expected content digest. When omitted, the digest embedded in
+    /// the signed envelope is used.
     expect_digest: Option<ByteArrayB64<32>>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
 struct VerifyOutput {
+    /// Principal derived from the verified envelope public key.
     user: Principal,
 }
 
 #[derive(Clone, Serialize)]
 struct InfoOutput<'a> {
+    /// Package name.
     name: &'a str,
+    /// Package version.
     version: &'a str,
 }
 

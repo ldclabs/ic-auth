@@ -12,6 +12,13 @@ export {
   Ed25519PublicKey
 } from '@icp-sdk/core/identity'
 
+/**
+ * Ensures a signing identity is represented as a `DelegationIdentity`.
+ *
+ * Plain signing identities are wrapped with an empty delegation chain so the
+ * rest of the SDK can use the same envelope-building path for delegated and
+ * non-delegated identities.
+ */
 export function toDelegationIdentity(
   identity: SignIdentity
 ): DelegationIdentity {
@@ -23,6 +30,12 @@ export function toDelegationIdentity(
       )
 }
 
+/**
+ * Signs an already-computed digest or arbitrary byte string.
+ *
+ * The returned envelope stores the signed bytes in `h` and includes compact
+ * delegation records when the identity has a non-empty delegation chain.
+ */
 export async function signArbitrary(
   identity: DelegationIdentity,
   data: Uint8Array
@@ -43,11 +56,17 @@ export async function signArbitrary(
   return val
 }
 
+/**
+ * Encodes an object as deterministic CBOR and returns its SHA3-256 digest.
+ */
 export function digestMessage(obj: any): Uint8Array {
   const data = deterministicEncode(obj)
   return sha3_256(data)
 }
 
+/**
+ * Signs the SHA3-256 digest of an object's deterministic CBOR encoding.
+ */
 export async function signMessage(
   identity: DelegationIdentity,
   obj: any
@@ -55,6 +74,12 @@ export async function signMessage(
   return signArbitrary(identity, digestMessage(obj))
 }
 
+/**
+ * Encodes bytes as padded standard Base64.
+ *
+ * Uses native `Uint8Array` helpers when available, then falls back to Node
+ * `Buffer`, then browser `btoa`.
+ */
 export function toBase64(bytes: Uint8Array): string {
   if (typeof (bytes as any).toBase64 === 'function') {
     return (bytes as any).toBase64()
@@ -70,6 +95,12 @@ export function toBase64(bytes: Uint8Array): string {
   return globalThis.btoa(result)
 }
 
+/**
+ * Decodes standard Base64 or Base64URL into bytes.
+ *
+ * Uses native `Uint8Array` helpers when available, then falls back to Node
+ * `Buffer`, then browser `atob`.
+ */
 export function fromBase64(str: string): Uint8Array {
   if (typeof (Uint8Array as any).fromBase64 === 'function') {
     if (str.includes('-') || str.includes('_')) {
@@ -86,6 +117,9 @@ export function fromBase64(str: string): Uint8Array {
   return out
 }
 
+/**
+ * Encodes bytes as unpadded Base64URL for IC-Auth headers and compact payloads.
+ */
 export function bytesToBase64Url(bytes: Uint8Array): string {
   return toBase64(bytes)
     .replaceAll('+', '-')
@@ -93,6 +127,9 @@ export function bytesToBase64Url(bytes: Uint8Array): string {
     .replaceAll('=', '')
 }
 
+/**
+ * Decodes unpadded Base64URL into bytes.
+ */
 export function base64ToBytes(str: string): Uint8Array {
   const padded = str.replaceAll('-', '+').replaceAll('_', '/')
   return fromBase64(padded)

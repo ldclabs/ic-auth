@@ -1,3 +1,32 @@
+//! Shared data types and serialization helpers for IC-Auth.
+//!
+//! This crate contains the wire-facing structures used by the Rust verifier,
+//! the TypeScript SDK, and applications that exchange IC-Auth delegations or
+//! signed envelopes. Byte fields use Base64URL strings in human-readable
+//! formats such as JSON while preserving compact byte strings in binary formats
+//! such as CBOR.
+//!
+//! The CBOR helpers wrap [`cbor2`] and provide deterministic RFC 8949 encoding
+//! for values that are signed or hashed. [`cbor_from_slice`] also contains the
+//! compatibility path needed by IC/Candid-specific types such as
+//! [`candid::Principal`].
+//!
+//! # Examples
+//!
+//! ```
+//! use candid::Principal;
+//! use ic_auth_types::{ByteBufB64, Delegation, deterministic_cbor_into_vec};
+//!
+//! let delegation = Delegation {
+//!     pubkey: ByteBufB64::from(vec![1, 2, 3]),
+//!     expiration: 1_900_000_000_000_000_000,
+//!     targets: Some(vec![Principal::management_canister()]),
+//! };
+//!
+//! let bytes = deterministic_cbor_into_vec(&delegation).unwrap();
+//! assert!(!bytes.is_empty());
+//! ```
+
 use candid::{CandidType, Principal};
 use serde::{Deserialize, Serialize};
 
@@ -44,7 +73,7 @@ pub struct SignInResponse {
     pub expiration: u64,
     /// The user canister public key. This key is used to derive the user principal.
     pub user_key: ByteBufB64,
-    /// seed is a part of the user_key
+    /// The seed component used to derive the user key.
     pub seed: ByteBufB64,
 }
 
@@ -52,10 +81,14 @@ pub struct SignInResponse {
 /// It is used to reduce the size of the delegation when it is serialized.
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct DelegationCompact {
+    /// The delegated-to key, encoded as `p` in compact JSON/CBOR maps.
     #[serde(rename = "p", alias = "pubkey")]
     pub pubkey: ByteBufB64,
+    /// The nanosecond UNIX timestamp after which the delegation is invalid,
+    /// encoded as `e` in compact JSON/CBOR maps.
     #[serde(rename = "e", alias = "expiration")]
     pub expiration: u64,
+    /// Optional canister targets, encoded as `t` in compact JSON/CBOR maps.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(rename = "t", alias = "targets")]
     pub targets: Option<Vec<Principal>>,
@@ -65,8 +98,10 @@ pub struct DelegationCompact {
 /// It is used to reduce the size of the delegation when it is serialized.
 #[derive(CandidType, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
 pub struct SignedDelegationCompact {
+    /// The compact delegation payload, encoded as `d`.
     #[serde(rename = "d", alias = "delegation")]
     pub delegation: DelegationCompact,
+    /// The signature over the delegation message, encoded as `s`.
     #[serde(rename = "s", alias = "signature")]
     pub signature: ByteBufB64,
 }

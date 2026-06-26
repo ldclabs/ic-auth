@@ -1,6 +1,6 @@
 [package]
 name = "ic_auth_verifier"
-description = "A Rust library used for integrating with IC-Auth."
+description = "Signature, delegation, HTTP envelope, and deep-link verification utilities for IC-Auth."
 publish = true
 repository = "https://github.com/ldclabs/ic-auth/tree/main/rs/ic_auth_verifier"
 version.workspace = true

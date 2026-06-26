@@ -1,6 +1,6 @@
 [package]
 name = "ic_auth_types"
-description = "A Rust types library used for integrating with IC-Auth."
+description = "Shared Rust data types, byte wrappers, and deterministic CBOR helpers for IC-Auth."
 publish = true
 repository = "https://github.com/ldclabs/ic-auth/tree/main/rs/ic_auth_types"
 version.workspace = true
