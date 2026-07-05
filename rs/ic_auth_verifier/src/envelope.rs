@@ -176,6 +176,14 @@ impl TryFrom<Signature> for SignedEnvelope {
                             pubkey: d.delegation.pubkey.into(),
                             expiration: d.delegation.expiration,
                             targets: d.delegation.targets,
+                            permissions: d.delegation.permissions.map(|p| match p {
+                                ic_agent::identity::DelegationPermissions::Queries => {
+                                    ic_auth_types::DelegationPermissions::Queries
+                                }
+                                ic_agent::identity::DelegationPermissions::All => {
+                                    ic_auth_types::DelegationPermissions::All
+                                }
+                            }),
                         },
                         signature: d.signature.into(),
                     })
@@ -918,6 +926,7 @@ mod tests {
                 pubkey: vec![9, 8, 7].into(),
                 expiration: u64::MAX,
                 targets: Some(vec![Principal::management_canister()]),
+                permissions: None,
             },
             signature: vec![6, 5, 4].into(),
         }]);
@@ -948,6 +957,7 @@ mod tests {
                     pubkey: vec![10, 11, 12].into(),
                     expiration: 123,
                     targets: Some(vec![Principal::management_canister()]),
+                    permissions: None,
                 },
                 signature: vec![13, 14, 15].into(),
             }]),
@@ -979,6 +989,7 @@ mod tests {
             pubkey: session.public_key().unwrap(),
             expiration,
             targets: Some(vec![target]),
+            permissions: None,
         };
         let signature = user
             .sign_delegation(&delegation)
@@ -990,6 +1001,7 @@ mod tests {
                 pubkey: delegation.pubkey.clone().into(),
                 expiration: delegation.expiration,
                 targets: delegation.targets.clone(),
+                permissions: None,
             },
             signature: signature.clone().into(),
         };
@@ -1037,6 +1049,7 @@ mod tests {
                 pubkey: vec![1, 2, 3].into(),
                 expiration: u64::MAX,
                 targets: None,
+                permissions: None,
             },
             signature: vec![4, 5, 6].into(),
         };
@@ -1059,6 +1072,7 @@ mod tests {
                     pubkey: vec![1, 2, 3].into(),
                     expiration: 0,
                     targets: None,
+                    permissions: None,
                 },
                 signature: vec![4, 5, 6].into(),
             }]),
@@ -1118,6 +1132,7 @@ mod tests {
                     pubkey: vec![9, 8, 7].into(),
                     expiration: u64::MAX,
                     targets: Some(vec![Principal::management_canister()]),
+                    permissions: None,
                 },
                 signature: vec![6, 5, 4].into(),
             }]),
@@ -1140,6 +1155,7 @@ mod tests {
                 pubkey: vec![1, 2, 3].into(),
                 expiration: u64::MAX,
                 targets: None,
+                permissions: None,
             },
             signature: vec![4, 5, 6].into(),
         };
@@ -1154,6 +1170,7 @@ mod tests {
                 pubkey: vec![1, 2, 3].into(),
                 expiration: 0,
                 targets: None,
+                permissions: None,
             },
             signature: vec![4, 5, 6].into(),
         };
@@ -1170,6 +1187,7 @@ mod tests {
                 pubkey: ByteBufB64::new(),
                 expiration: u64::MAX,
                 targets: None,
+                permissions: None,
             },
             signature: ByteBufB64::new(),
         };

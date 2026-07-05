@@ -1,6 +1,14 @@
 import { Principal } from '@icp-sdk/core/principal'
 
 /**
+ * The kinds of requests a {@link Delegation} permits.
+ *
+ * - `queries`: Only query calls and `read_state` requests are permitted.
+ * - `all`: All request types are permitted.
+ */
+export type DelegationPermissions = 'queries' | 'all'
+
+/**
  * Full-name delegation record.
  *
  * A delegation authorizes `pubkey` to act for the previous identity in a chain
@@ -13,6 +21,8 @@ export interface Delegation {
   expiration: bigint
   /** Optional canister targets for this delegation. */
   targets?: Principal[]
+  /** Optional kinds of requests this delegation permits. */
+  permissions?: DelegationPermissions
 }
 
 /**
@@ -30,6 +40,9 @@ export function toDelegation(obj: Delegation | DelegationCompact): Delegation {
   if (obj.t) {
     val.targets = obj.t
   }
+  if (obj.perm) {
+    val.permissions = obj.perm
+  }
 
   return val
 }
@@ -41,6 +54,7 @@ export interface DelegationCompact {
   p: Uint8Array // pubkey
   e: bigint // expiration
   t?: Principal[] // targets
+  perm?: DelegationPermissions // permissions
 }
 
 /**
@@ -59,6 +73,9 @@ export function toDelegationCompact(
   }
   if (obj.targets) {
     val.t = obj.targets
+  }
+  if (obj.permissions) {
+    val.perm = obj.permissions
   }
 
   return val

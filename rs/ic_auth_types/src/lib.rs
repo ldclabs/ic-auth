@@ -21,6 +21,7 @@
 //!     pubkey: ByteBufB64::from(vec![1, 2, 3]),
 //!     expiration: 1_900_000_000_000_000_000,
 //!     targets: Some(vec![Principal::management_canister()]),
+//!     permissions: None,
 //! };
 //!
 //! let bytes = deterministic_cbor_into_vec(&delegation).unwrap();
@@ -53,6 +54,21 @@ pub struct Delegation {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(alias = "t")]
     pub targets: Option<Vec<Principal>>,
+    /// The kinds of requests this delegation permits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(alias = "perm")]
+    pub permissions: Option<DelegationPermissions>,
+}
+
+/// The kinds of requests a [`Delegation`] permits.
+#[derive(CandidType, Clone, Debug, Deserialize, Serialize, Eq, PartialEq)]
+pub enum DelegationPermissions {
+    /// Only query calls and `read_state` requests are permitted.
+    #[serde(rename = "queries")]
+    Queries,
+    /// All request types are permitted.
+    #[serde(rename = "all")]
+    All,
 }
 
 /// SignedDelegation is a [`Delegation`] that has been signed by an [`Identity`](https://docs.rs/ic-agent/latest/ic_agent/trait.Identity.html).
@@ -92,6 +108,10 @@ pub struct DelegationCompact {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[serde(rename = "t", alias = "targets")]
     pub targets: Option<Vec<Principal>>,
+    /// Optional permissions, encoded as `perm` in compact JSON/CBOR maps.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "perm", alias = "permissions")]
+    pub permissions: Option<DelegationPermissions>,
 }
 
 /// SignedDelegationCompact is a compact representation of a [`SignedDelegation`].
@@ -112,6 +132,7 @@ impl From<DelegationCompact> for Delegation {
             pubkey: d.pubkey,
             expiration: d.expiration,
             targets: d.targets,
+            permissions: d.permissions,
         }
     }
 }
@@ -122,6 +143,7 @@ impl From<Delegation> for DelegationCompact {
             pubkey: d.pubkey,
             expiration: d.expiration,
             targets: d.targets,
+            permissions: d.permissions,
         }
     }
 }
@@ -154,13 +176,14 @@ mod tests {
             pubkey: ByteBufB64(vec![1, 2, 3, 4]),
             expiration: 99,
             targets: Some(vec![Principal::management_canister()]),
+            permissions: Some(DelegationPermissions::Queries),
         };
 
         let data = serde_json::to_string(&d).unwrap();
         println!("{data}");
         assert_eq!(
             data,
-            r#"{"pubkey":"AQIDBA==","expiration":99,"targets":["aaaaa-aa"]}"#
+            r#"{"pubkey":"b64:AQIDBA==","expiration":99,"targets":["aaaaa-aa"],"permissions":"queries"}"#
         );
         let d1: Delegation = serde_json::from_str(&data).unwrap();
         assert_eq!(d, d1);
@@ -170,7 +193,7 @@ mod tests {
         println!("{}", hex::encode(&data));
         assert_eq!(
             data,
-            hex::decode("a3667075626b657944010203046a65787069726174696f6e186367746172676574738140")
+            hex::decode("a4667075626b657944010203046a65787069726174696f6e1863677461726765747381406b7065726d697373696f6e736771756572696573")
                 .unwrap()
         );
         let d1: Delegation = cbor_from_slice(&data[..]).unwrap();
@@ -183,6 +206,7 @@ mod tests {
             pubkey: ByteBufB64(vec![1, 2, 3, 4]),
             expiration: 99,
             targets: Some(vec![Principal::management_canister()]),
+            permissions: None,
         };
         let compact: DelegationCompact = delegation.clone().into();
         assert_eq!(compact.pubkey, delegation.pubkey);

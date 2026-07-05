@@ -1,7 +1,7 @@
 use arc_swap::ArcSwap;
 use candid::Principal;
 use ic_agent::{
-    identity::{Delegation, SignedDelegation},
+    identity::{Delegation, DelegationPermissions, SignedDelegation},
     {Signature, agent::EnvelopeContent},
 };
 use std::{
@@ -197,6 +197,10 @@ pub fn signed_delegation_from(src: ic_auth_types::SignedDelegation) -> SignedDel
             pubkey: src.delegation.pubkey.0,
             expiration: src.delegation.expiration,
             targets: src.delegation.targets,
+            permissions: src.delegation.permissions.map(|p| match p {
+                ic_auth_types::DelegationPermissions::Queries => DelegationPermissions::Queries,
+                ic_auth_types::DelegationPermissions::All => DelegationPermissions::All,
+            }),
         },
         signature: src.signature.0,
     }
@@ -229,6 +233,7 @@ pub fn delegated_basic_identity(identity: &BasicIdentity, expires_in_ms: u64) ->
         pubkey: session.public_key().unwrap(),
         expiration: expiration.as_nanos() as u64,
         targets: None,
+        permissions: None,
     };
     let signature = identity.sign_delegation(&delegation).unwrap();
     DelegatedIdentity::new_unchecked(
@@ -314,6 +319,7 @@ mod tests {
             pubkey: session.public_key().unwrap(),
             expiration: expired.as_nanos() as u64,
             targets: None,
+            permissions: None,
         };
         let signature = basic.sign_delegation(&delegation).unwrap();
         let delegated = DelegatedIdentity::new_unchecked(
@@ -337,6 +343,7 @@ mod tests {
             pubkey: session.public_key().unwrap(),
             expiration: not_expired.as_nanos() as u64,
             targets: None,
+            permissions: None,
         };
         let signature = basic.sign_delegation(&delegation).unwrap();
         let delegated = DelegatedIdentity::new_unchecked(
@@ -381,6 +388,7 @@ mod tests {
             pubkey: session1.public_key().unwrap(),
             expiration: expiration1,
             targets: None,
+            permissions: None,
         };
         let signature1 = basic.sign_delegation(&delegation1).unwrap();
 
@@ -389,6 +397,7 @@ mod tests {
             pubkey: session2.public_key().unwrap(),
             expiration: expiration2,
             targets: None,
+            permissions: None,
         };
         let signature2 = basic.sign_delegation(&delegation2).unwrap();
 
@@ -456,6 +465,7 @@ mod tests {
                 .saturating_add(Duration::from_secs(60))
                 .as_nanos() as u64,
             targets: Some(vec![Principal::management_canister()]),
+            permissions: None,
         };
         let signature = atomic.sign_delegation(&delegation).unwrap();
         assert!(!signature.signature.unwrap().is_empty());
@@ -468,6 +478,7 @@ mod tests {
                 pubkey: vec![1, 2, 3].into(),
                 expiration: 42,
                 targets: Some(vec![Principal::management_canister()]),
+                permissions: None,
             },
             signature: vec![4, 5, 6].into(),
         };

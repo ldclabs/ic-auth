@@ -13,9 +13,19 @@ use std::borrow::Cow;
 
 pub use serde_bytes::{ByteArray, ByteBuf, Bytes};
 
+/// Prefix tagging Base64URL encoded strings in human-readable serialization and `Display`.
+///
+/// The `:` separator is not part of the Base64 alphabet, so a well-formed Base64URL string can
+/// never contain it. This makes the prefix unambiguous: decoding accepts values with or without
+/// it, while encoding (serde to `String` and `Display`) always emits it.
+pub const B64_PREFIX: &str = "b64:";
+
 /// Wrapper around `Vec<u8>` to serialize and deserialize efficiently.
-/// If the serialization format is human readable (formats like JSON and YAML), it will be encoded in Base64URL.
-/// Otherwise, it will be serialized as a byte array.
+/// If the serialization format is human readable (formats like JSON and YAML), it will be encoded
+/// in Base64URL with a `b64:` prefix. Otherwise, it will be serialized as a byte array.
+///
+/// Deserialization accepts the Base64URL value with or without the `b64:` prefix, and tolerates both
+/// standard and URL-safe alphabets.
 ///
 /// # Examples
 ///
@@ -32,12 +42,14 @@ pub use serde_bytes::{ByteArray, ByteBuf, Bytes};
 ///     data: vec![1, 2, 3, 4].into(),
 /// };
 ///
-/// // Serializes to Base64URL in human-readable formats
+/// // Serializes to a `b64:`-prefixed Base64URL string in human-readable formats
 /// let json = serde_json::to_string(&example).unwrap();
-/// assert_eq!(json, r#"{"data":"AQIDBA=="}"#);
+/// assert_eq!(json, r#"{"data":"b64:AQIDBA=="}"#);
 ///
-/// // Deserializes from Base64URL
+/// // Deserializes from Base64URL, with or without the `b64:` prefix
 /// let parsed: Example = serde_json::from_str(&json).unwrap();
+/// assert_eq!(parsed.data.as_ref(), &[1, 2, 3, 4]);
+/// let parsed: Example = serde_json::from_str(r#"{"data":"AQIDBA=="}"#).unwrap();
 /// assert_eq!(parsed.data.as_ref(), &[1, 2, 3, 4]);
 /// ```
 #[derive(CandidType, Default, Clone, Eq, Ord)]
@@ -94,8 +106,11 @@ impl ByteBufB64 {
 }
 
 /// Wrapper around `[u8; N]` to serialize and deserialize efficiently.
-/// If the serialization format is human readable (formats like JSON and YAML), it will be encoded in Base64URL.
-/// Otherwise, it will be serialized as a byte array.
+/// If the serialization format is human readable (formats like JSON and YAML), it will be encoded
+/// in Base64URL with a `b64:` prefix. Otherwise, it will be serialized as a byte array.
+///
+/// Deserialization accepts the Base64URL value with or without the `b64:` prefix, and tolerates both
+/// standard and URL-safe alphabets.
 ///
 /// # Examples
 ///
@@ -112,12 +127,14 @@ impl ByteBufB64 {
 ///     data: [1, 2, 3, 4].into(),
 /// };
 ///
-/// // Serializes to Base64URL in human-readable formats
+/// // Serializes to a `b64:`-prefixed Base64URL string in human-readable formats
 /// let json = serde_json::to_string(&example).unwrap();
-/// assert_eq!(json, r#"{"data":"AQIDBA=="}"#);
+/// assert_eq!(json, r#"{"data":"b64:AQIDBA=="}"#);
 ///
-/// // Deserializes from Base64URL
+/// // Deserializes from Base64URL, with or without the `b64:` prefix
 /// let parsed: Example = serde_json::from_str(&json).unwrap();
+/// assert_eq!(parsed.data.as_ref(), &[1, 2, 3, 4]);
+/// let parsed: Example = serde_json::from_str(r#"{"data":"AQIDBA=="}"#).unwrap();
 /// assert_eq!(parsed.data.as_ref(), &[1, 2, 3, 4]);
 /// ```
 #[derive(CandidType, Clone, Eq, Ord)]
@@ -184,7 +201,7 @@ impl<const N: usize> Default for ByteArrayB64<N> {
 
 impl Display for ByteBufB64 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", BASE64_URL_SAFE.encode(&self.0))
+        write!(f, "{B64_PREFIX}{}", BASE64_URL_SAFE.encode(&self.0))
     }
 }
 
@@ -196,7 +213,7 @@ impl Debug for ByteBufB64 {
 
 impl<const N: usize> Display for ByteArrayB64<N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", BASE64_URL_SAFE.encode(self.0))
+        write!(f, "{B64_PREFIX}{}", BASE64_URL_SAFE.encode(self.0))
     }
 }
 
@@ -464,8 +481,11 @@ impl<'a, const N: usize> IntoIterator for &'a mut ByteArrayB64<N> {
 }
 
 /// Wrapper around borrowed/owned byte slice to serialize and deserialize efficiently.
-/// If the serialization format is human readable (formats like JSON and YAML), it will be encoded in Base64URL.
-/// Otherwise, it will be serialized as a byte array.
+/// If the serialization format is human readable (formats like JSON and YAML), it will be encoded
+/// in Base64URL with a `b64:` prefix. Otherwise, it will be serialized as a byte array.
+///
+/// Deserialization accepts the Base64URL value with or without the `b64:` prefix, and tolerates both
+/// standard and URL-safe alphabets.
 ///
 /// This type mirrors serde_bytes::Bytes (borrow or own) while following the Base64URL
 /// behavior consistent with ByteBufB64 in human-readable formats.
@@ -511,7 +531,7 @@ impl<'a> BytesB64<'a> {
 
 impl<'a> Display for BytesB64<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", BASE64_URL_SAFE.encode(self.0.as_ref()))
+        write!(f, "{B64_PREFIX}{}", BASE64_URL_SAFE.encode(self.0.as_ref()))
     }
 }
 
@@ -605,6 +625,8 @@ impl<'a> TryFrom<&str> for BytesB64<'a> {
 }
 
 fn try_from_base64(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
+    // Accept both the prefixed (`b64:...`) and bare forms for backward compatibility.
+    let s = s.strip_prefix(B64_PREFIX).unwrap_or(s);
     let v = s.trim_end_matches('=');
     if v.contains(['+', '/']) {
         BASE64_STANDARD_NO_PAD.decode(v)
@@ -618,9 +640,7 @@ fn try_from_base64(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
 impl<'a> serde::Serialize for BytesB64<'a> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
-            BASE64_URL_SAFE
-                .encode(self.0.as_ref())
-                .serialize(serializer)
+            format!("{B64_PREFIX}{}", BASE64_URL_SAFE.encode(self.0.as_ref())).serialize(serializer)
         } else {
             serializer.serialize_bytes(self.0.as_ref())
         }
@@ -645,7 +665,7 @@ impl<'de, 'a> serde::Deserialize<'de> for BytesB64<'a> {
 impl serde::Serialize for ByteBufB64 {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
-            BASE64_URL_SAFE.encode(&self.0).serialize(serializer)
+            format!("{B64_PREFIX}{}", BASE64_URL_SAFE.encode(&self.0)).serialize(serializer)
         } else {
             serializer.serialize_bytes(&self.0)
         }
@@ -657,7 +677,7 @@ impl serde::Serialize for ByteBufB64 {
 impl<const N: usize> serde::Serialize for ByteArrayB64<N> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
-            BASE64_URL_SAFE.encode(self.0).serialize(serializer)
+            format!("{B64_PREFIX}{}", BASE64_URL_SAFE.encode(self.0)).serialize(serializer)
         } else {
             serializer.serialize_bytes(&self.0)
         }
@@ -903,18 +923,22 @@ mod tests {
         };
 
         println!("{t:?}");
-        // Test { a: ByteBufB64(AQIDBA==), b: ByteArrayB64<4>(AQIDBA==) }
-        assert_eq!(format!("{}", t.a), "AQIDBA==");
-        assert_eq!(format!("{}", t.b), "AQIDBA==");
-        assert_eq!(format!("{:?}", t.a), "ByteBufB64(AQIDBA==)");
-        assert_eq!(format!("{:?}", t.b), "ByteArrayB64<4>(AQIDBA==)");
+        // Test { a: ByteBufB64(b64:AQIDBA==), b: ByteArrayB64<4>(b64:AQIDBA==) }
+        assert_eq!(format!("{}", t.a), "b64:AQIDBA==");
+        assert_eq!(format!("{}", t.b), "b64:AQIDBA==");
+        assert_eq!(format!("{:?}", t.a), "ByteBufB64(b64:AQIDBA==)");
+        assert_eq!(format!("{:?}", t.b), "ByteArrayB64<4>(b64:AQIDBA==)");
 
         let data = serde_json::to_string(&t).unwrap();
         println!("{data}");
-        assert_eq!(data, r#"{"a":"AQIDBA==","b":"AQIDBA=="}"#);
+        assert_eq!(data, r#"{"a":"b64:AQIDBA==","b":"b64:AQIDBA=="}"#);
         let t1: Test = serde_json::from_str(&data).unwrap();
         assert_eq!(t, t1);
+        // Deserialization stays compatible with the bare (unprefixed) form, padded or not.
         let t1: Test = serde_json::from_str(r#"{"a":"AQIDBA=","b":"AQIDBA"}"#).unwrap();
+        assert_eq!(t, t1);
+        // ...and with an explicit `b64:` prefix.
+        let t1: Test = serde_json::from_str(r#"{"a":"b64:AQIDBA=","b":"b64:AQIDBA"}"#).unwrap();
         assert_eq!(t, t1);
 
         let mut data = Vec::new();
@@ -956,7 +980,7 @@ mod tests {
     fn test_display_is_url_safe_padded() {
         // 选择一些字节，标准 base64 可能包含 '+' '/'，以验证显示时统一为 URL safe
         let data = vec![251u8, 255, 239]; // 只是示例
-        let expected_url = BASE64_URL_SAFE.encode(&data);
+        let expected_url = format!("{B64_PREFIX}{}", BASE64_URL_SAFE.encode(&data));
 
         let bb = ByteBufB64::from(data.clone());
         assert_eq!(bb.to_string(), expected_url);
@@ -1031,8 +1055,11 @@ mod tests {
         };
 
         let json = serde_json::to_string(&value).unwrap();
-        assert_eq!(json, r#"{"d":"-__v"}"#);
+        assert_eq!(json, r#"{"d":"b64:-__v"}"#);
         let parsed: S = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, value);
+        // The bare (unprefixed) form still deserializes.
+        let parsed: S = serde_json::from_str(r#"{"d":"-__v"}"#).unwrap();
         assert_eq!(parsed, value);
 
         let mut data = Vec::new();
@@ -1166,13 +1193,13 @@ mod tests {
         assert_eq!(array.into_vec(), Vec::<u8>::new());
 
         let buf = ByteBufB64::new();
-        assert_eq!(buf.to_string(), "");
-        assert_eq!(format!("{buf:?}"), "ByteBufB64()");
+        assert_eq!(buf.to_string(), "b64:");
+        assert_eq!(format!("{buf:?}"), "ByteBufB64(b64:)");
 
         let bytes = BytesB64::new();
         assert_eq!(bytes.to_base64(), "");
-        assert_eq!(bytes.to_string(), "");
-        assert_eq!(format!("{bytes:?}"), "BytesB64()");
+        assert_eq!(bytes.to_string(), "b64:");
+        assert_eq!(format!("{bytes:?}"), "BytesB64(b64:)");
         assert_eq!(bytes.into_owned(), Vec::<u8>::new());
     }
 
@@ -1187,8 +1214,8 @@ mod tests {
         assert_eq!(borrowed.as_ref(), data.as_slice());
         assert_eq!(borrowed.deref(), data.as_slice());
         assert_eq!(borrowed.to_base64(), "AQID");
-        assert_eq!(format!("{borrowed}"), "AQID");
-        assert_eq!(format!("{borrowed:?}"), "BytesB64(AQID)");
+        assert_eq!(format!("{borrowed}"), "b64:AQID");
+        assert_eq!(format!("{borrowed:?}"), "BytesB64(b64:AQID)");
 
         let owned = BytesB64::from_vec(vec![4, 5, 6]);
         assert_eq!(owned.clone().into_owned(), vec![4, 5, 6]);

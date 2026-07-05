@@ -47,6 +47,7 @@ fn main() -> Result<(), String> {
         pubkey: ByteBufB64::from(vec![1, 2, 3]),
         expiration: 1_900_000_000_000_000_000,
         targets: Some(vec![Principal::management_canister()]),
+        permissions: None,
     };
 
     let compact: DelegationCompact = delegation.into();
