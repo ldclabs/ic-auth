@@ -151,12 +151,34 @@ mod tests {
     use rand::{Rng, rng};
 
     const MESSAGE: &[u8] = b"some message";
+    const P256_IDENTITY_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgvXJuZvDH64piyxw5
+ly/vUyYqGs2p88/SR7W6cRPkBjihRANCAARRttlXg16tlM9Z9tDvj38Y0u7xNofw
+FRL8jv/6Kmy74w/LB+cEUhlKSzjEZsD9ltrOysyXi/jjpTlQhXEIYZor
+-----END PRIVATE KEY-----
+";
+    const SECP256K1_IDENTITY_PEM: &str = "\
+-----BEGIN PRIVATE KEY-----
+MIGEAgEAMBAGByqGSM49AgEGBSuBBAAKBG0wawIBAQQgCDLudkRxUeRDhnUp2pvL
+xLDICLIoNCa1sQdMgz5Y14GhRANCAASA7zusnWjPN0y8nJlD4YAEOpTEYu+CcCdO
+VwidXc26G4+/g7dUbMwbN4E3d3bpxHEP31M+2by6jY67MqFKKroR
+-----END PRIVATE KEY-----
+";
 
     fn rand_bytes<const N: usize>() -> [u8; N] {
         let mut rng = rng();
         let mut bytes = [0u8; N];
         rng.fill_bytes(&mut bytes);
         bytes
+    }
+
+    fn p256_identity() -> Prime256v1Identity {
+        Prime256v1Identity::from_pem(P256_IDENTITY_PEM).unwrap()
+    }
+
+    fn secp256k1_identity() -> Secp256k1Identity {
+        Secp256k1Identity::from_pem(SECP256K1_IDENTITY_PEM).unwrap()
     }
 
     #[test]
@@ -177,9 +199,7 @@ mod tests {
         assert_eq!(alg, Algorithm::EcdsaSecp256k1);
         assert!(k256::ecdsa::VerifyingKey::from_sec1_bytes(&pk).is_ok());
 
-        let sk: [u8; 32] = rand_bytes();
-        let sk = k256::ecdsa::SigningKey::from_bytes(&sk.into()).unwrap();
-        let id = Secp256k1Identity::from_private_key(sk.into());
+        let id = secp256k1_identity();
         let sig = id.sign_arbitrary(MESSAGE).unwrap();
         let pk_der = id.public_key().unwrap();
         let (alg, pk) = user_public_key_from_der(&pk_der).unwrap();
@@ -194,9 +214,7 @@ mod tests {
         assert_eq!(alg, Algorithm::EcdsaP256);
         assert!(p256::ecdsa::VerifyingKey::from_sec1_bytes(&pk).is_ok());
 
-        let sk: [u8; 32] = rand_bytes();
-        let sk = p256::ecdsa::SigningKey::from_bytes(&sk.into()).unwrap();
-        let id = Prime256v1Identity::from_private_key(sk.into());
+        let id = p256_identity();
         let sig = id.sign_arbitrary(MESSAGE).unwrap();
         let pk_der = id.public_key().unwrap();
         let (alg, pk) = user_public_key_from_der(&pk_der).unwrap();
@@ -250,16 +268,12 @@ mod tests {
             "Ed25519 signature verification failed"
         );
 
-        let sk: [u8; 32] = rand_bytes();
-        let sk = p256::ecdsa::SigningKey::from_bytes(&sk.into()).unwrap();
-        let id = Prime256v1Identity::from_private_key(sk.into());
+        let id = p256_identity();
         let pk_der = id.public_key().unwrap();
         let (alg, pk) = user_public_key_from_der(&pk_der).unwrap();
         assert!(verify_basic_sig(alg, &pk, MESSAGE, &[]).is_err());
 
-        let sk: [u8; 32] = rand_bytes();
-        let sk = k256::ecdsa::SigningKey::from_bytes(&sk.into()).unwrap();
-        let id = Secp256k1Identity::from_private_key(sk.into());
+        let id = secp256k1_identity();
         let pk_der = id.public_key().unwrap();
         let (alg, pk) = user_public_key_from_der(&pk_der).unwrap();
         assert!(verify_basic_sig(alg, &pk, MESSAGE, &[]).is_err());
