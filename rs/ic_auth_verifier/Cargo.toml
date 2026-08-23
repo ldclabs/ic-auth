@@ -23,6 +23,7 @@ p256 = { workspace = true }
 ed25519-dalek = { workspace = true }
 simple_asn1 = { workspace = true }
 ic-canister-sig-creation = { workspace = true }
+ic-representation-independent-hash = { workspace = true }
 ic-certification = { workspace = true }
 ic-certificate-verification = { workspace = true }
 arc-swap = { workspace = true, optional = true }

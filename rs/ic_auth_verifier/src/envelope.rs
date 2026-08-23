@@ -5,10 +5,10 @@ use base64::{
 use candid::{CandidType, Principal};
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName};
 use ic_auth_types::{
-    ByteBufB64, DelegationCompact, SignedDelegation, SignedDelegationCompact, cbor_from_slice,
-    deterministic_cbor_into_vec,
+    ByteBufB64, DelegationCompact, DelegationPermissions, SignedDelegation,
+    SignedDelegationCompact, cbor_from_slice, deterministic_cbor_into_vec,
 };
-use ic_canister_sig_creation::delegation_signature_msg;
+use ic_representation_independent_hash::{Value as HashValue, representation_independent_hash};
 use serde::{Deserialize, Serialize};
 
 #[cfg(feature = "identity")]
@@ -436,13 +436,22 @@ impl SignedEnvelope {
                 .parse()
                 .map_err(|err| format!("insert {HEADER_IC_AUTH_PUBKEY} header failed: {err}"))?,
         );
-        if let Some(digest) = &self.digest {
-            headers.insert(
-                &HEADER_IC_AUTH_CONTENT_DIGEST,
-                URL_SAFE_NO_PAD.encode(digest).parse().map_err(|err| {
-                    format!("insert {HEADER_IC_AUTH_CONTENT_DIGEST} header failed: {err}")
-                })?,
-            );
+        // The optional headers are cleared when absent from this envelope.
+        // `insert` alone would leave a previous envelope's digest or delegation
+        // behind when the caller reuses a `HeaderMap`, pairing them with the new
+        // public key and signature.
+        match &self.digest {
+            Some(digest) => {
+                headers.insert(
+                    &HEADER_IC_AUTH_CONTENT_DIGEST,
+                    URL_SAFE_NO_PAD.encode(digest).parse().map_err(|err| {
+                        format!("insert {HEADER_IC_AUTH_CONTENT_DIGEST} header failed: {err}")
+                    })?,
+                );
+            }
+            None => {
+                headers.remove(&HEADER_IC_AUTH_CONTENT_DIGEST);
+            }
         }
         headers.insert(
             &HEADER_IC_AUTH_SIGNATURE,
@@ -451,16 +460,21 @@ impl SignedEnvelope {
                 .parse()
                 .map_err(|err| format!("insert {HEADER_IC_AUTH_SIGNATURE} header failed: {err}"))?,
         );
-        if let Some(delegations) = &self.delegation {
-            headers.insert(
-                &HEADER_IC_AUTH_DELEGATION,
-                URL_SAFE_NO_PAD
-                    .encode(deterministic_cbor_into_vec(&delegations)?)
-                    .parse()
-                    .map_err(|err| {
-                        format!("insert {HEADER_IC_AUTH_DELEGATION} header failed: {err}")
-                    })?,
-            );
+        match &self.delegation {
+            Some(delegations) => {
+                headers.insert(
+                    &HEADER_IC_AUTH_DELEGATION,
+                    URL_SAFE_NO_PAD
+                        .encode(deterministic_cbor_into_vec(&delegations)?)
+                        .parse()
+                        .map_err(|err| {
+                            format!("insert {HEADER_IC_AUTH_DELEGATION} header failed: {err}")
+                        })?,
+                );
+            }
+            None => {
+                headers.remove(&HEADER_IC_AUTH_DELEGATION);
+            }
         }
         Ok(())
     }
@@ -546,22 +560,52 @@ fn check_delegation_expiration(expiration_ns: u64, now_ms: u64) -> Result<(), St
 }
 
 /// Builds the domain-separated message whose signature authorizes the delegation.
+///
+/// The hashed map must contain every field the signer put in the delegation,
+/// including `permissions`. `delegation_signature_msg` predates that field and
+/// cannot hash it, so the map is built here to stay byte-identical to
+/// `ic_agent::identity::Delegation::signable`. Leaving `permissions` out would
+/// make it unauthenticated: a `Queries`-only delegation could be rewritten to
+/// `All` without breaking the signature.
 fn delegation_signed_message(delegation: &DelegationCompact) -> Vec<u8> {
-    let targets = delegation.targets.as_ref().map(|targets| {
-        targets
-            .iter()
-            .map(|p| p.as_slice().to_vec())
-            .collect::<Vec<Vec<u8>>>()
-    });
-    let msg = delegation_signature_msg(
-        delegation.pubkey.as_slice(),
-        delegation.expiration,
-        targets.as_ref(),
-    );
+    let mut map: Vec<(String, HashValue)> = Vec::with_capacity(4);
+    map.push((
+        "pubkey".to_string(),
+        HashValue::Bytes(delegation.pubkey.to_vec()),
+    ));
+    map.push((
+        "expiration".to_string(),
+        HashValue::Number(delegation.expiration),
+    ));
+    if let Some(targets) = &delegation.targets {
+        map.push((
+            "targets".to_string(),
+            HashValue::Array(
+                targets
+                    .iter()
+                    .map(|p| HashValue::Bytes(p.as_slice().to_vec()))
+                    .collect(),
+            ),
+        ));
+    }
+    if let Some(permissions) = &delegation.permissions {
+        // The variant names match the `#[serde(rename = ...)]` on
+        // `DelegationPermissions`, which is what the signer serializes.
+        let permissions = match permissions {
+            DelegationPermissions::Queries => "queries",
+            DelegationPermissions::All => "all",
+        };
+        map.push((
+            "permissions".to_string(),
+            HashValue::String(permissions.to_string()),
+        ));
+    }
+
+    let msg = representation_independent_hash(&map);
     let mut message =
         Vec::with_capacity(IC_REQUEST_AUTH_DELEGATION_DOMAIN_SEPARATOR.len() + msg.len());
     message.extend_from_slice(IC_REQUEST_AUTH_DELEGATION_DOMAIN_SEPARATOR);
-    message.extend(msg);
+    message.extend_from_slice(&msg);
     message
 }
 
@@ -616,7 +660,14 @@ pub fn extract_user(headers: &HeaderMap) -> Principal {
 /// # Returns
 /// * `Result<Vec<u8>, String>` - The decoded data or an error message
 pub fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
-    let data = data.trim().trim_end_matches('=');
+    let trimmed = data.trim();
+    let data = trimmed.trim_end_matches('=');
+    // Base64 padding is never longer than two `=`. Stripping an unbounded run
+    // would decode `"===="` to empty bytes, so a garbage header would yield an
+    // empty key instead of being rejected.
+    if trimmed.len() - data.len() > 2 {
+        return Err("failed to decode base64 data: invalid padding".to_string());
+    }
     if data.contains(['+', '/']) {
         STANDARD_NO_PAD.decode(data)
     } else {
@@ -1083,6 +1134,163 @@ mod tests {
         assert!(err.contains("Delegation has expired"));
     }
 
+    #[cfg(feature = "identity")]
+    #[test]
+    fn test_delegation_permissions_are_covered_by_the_signature() {
+        use ic_agent::identity::DelegationPermissions as AgentPerms;
+
+        let user = BasicIdentity::from_raw_key(&[8u8; 32]);
+        let session = BasicIdentity::from_raw_key(&[9u8; 32]);
+        let expiration = unix_timestamp()
+            .saturating_add(Duration::from_secs(3600))
+            .as_nanos() as u64;
+
+        let cases = [
+            (None, None),
+            (
+                Some(AgentPerms::Queries),
+                Some(ic_auth_types::DelegationPermissions::Queries),
+            ),
+            (
+                Some(AgentPerms::All),
+                Some(ic_auth_types::DelegationPermissions::All),
+            ),
+        ];
+
+        let mut messages = Vec::new();
+        for (agent_perms, our_perms) in cases {
+            let agent = AgentDelegation {
+                pubkey: session.public_key().unwrap(),
+                expiration,
+                targets: None,
+                permissions: agent_perms,
+            };
+            let compact = DelegationCompact {
+                pubkey: agent.pubkey.clone().into(),
+                expiration: agent.expiration,
+                targets: agent.targets.clone(),
+                permissions: our_perms,
+            };
+
+            // The message this crate recomputes must be exactly what the signer
+            // signed, or a delegation carrying `permissions` never verifies.
+            assert_eq!(
+                delegation_signed_message(&compact),
+                agent.signable(),
+                "recomputed message diverges from ic-agent for {:?}",
+                compact.permissions
+            );
+            messages.push(delegation_signed_message(&compact));
+        }
+
+        // ...and each permission value must produce a distinct message, so that
+        // `permissions` cannot be rewritten without breaking the signature.
+        assert_ne!(messages[0], messages[1]);
+        assert_ne!(messages[0], messages[2]);
+        assert_ne!(messages[1], messages[2]);
+
+        // End to end: tampering with `permissions` invalidates the chain.
+        let agent = AgentDelegation {
+            pubkey: session.public_key().unwrap(),
+            expiration,
+            targets: None,
+            permissions: Some(AgentPerms::Queries),
+        };
+        let signature = user.sign_delegation(&agent).unwrap().signature.unwrap();
+        let signed = SignedDelegationCompact {
+            delegation: DelegationCompact {
+                pubkey: agent.pubkey.clone().into(),
+                expiration: agent.expiration,
+                targets: None,
+                permissions: Some(ic_auth_types::DelegationPermissions::Queries),
+            },
+            signature: signature.into(),
+        };
+        let user_pubkey = user.public_key().unwrap();
+        let session_pubkey = session.public_key().unwrap();
+        let now_ms = unix_timestamp().as_millis() as u64;
+        verify_delegation_chain(
+            &user_pubkey,
+            &session_pubkey,
+            std::slice::from_ref(&signed),
+            now_ms,
+            None,
+        )
+        .unwrap();
+
+        for tampered in [None, Some(ic_auth_types::DelegationPermissions::All)] {
+            let mut forged = signed.clone();
+            forged.delegation.permissions = tampered;
+            assert!(
+                verify_delegation_chain(
+                    &user_pubkey,
+                    &session_pubkey,
+                    std::slice::from_ref(&forged),
+                    now_ms,
+                    None,
+                )
+                .is_err(),
+                "rewriting permissions must invalidate the delegation"
+            );
+        }
+    }
+
+    #[test]
+    fn test_to_headers_clears_stale_optional_headers() {
+        let full = SignedEnvelope {
+            pubkey: vec![1].into(),
+            signature: vec![2].into(),
+            digest: Some(vec![3].into()),
+            delegation: Some(vec![SignedDelegationCompact {
+                delegation: DelegationCompact {
+                    pubkey: vec![4].into(),
+                    expiration: 9,
+                    targets: None,
+                    permissions: None,
+                },
+                signature: vec![5].into(),
+            }]),
+        };
+        let bare = SignedEnvelope {
+            pubkey: vec![9].into(),
+            signature: vec![8].into(),
+            digest: None,
+            delegation: None,
+        };
+
+        // Writing `bare` over a reused map must not leave `full`'s digest and
+        // delegation behind to be paired with the new key and signature.
+        let mut headers = HeaderMap::new();
+        full.to_headers(&mut headers).unwrap();
+        bare.to_headers(&mut headers).unwrap();
+
+        assert!(headers.get(&HEADER_IC_AUTH_CONTENT_DIGEST).is_none());
+        assert!(headers.get(&HEADER_IC_AUTH_DELEGATION).is_none());
+        // No digest header means the envelope is no longer reconstructable.
+        assert!(SignedEnvelope::from_headers(&headers).is_none());
+    }
+
+    #[test]
+    fn test_decode_base64_rejects_overlong_padding() {
+        // Optional padding, in either alphabet, still decodes.
+        assert_eq!(decode_base64("AQID").unwrap(), vec![1, 2, 3]);
+        assert_eq!(decode_base64("AQIDBA==").unwrap(), vec![1, 2, 3, 4]);
+        assert!(decode_base64("").unwrap().is_empty());
+
+        // A run of `=` is not data: these used to decode instead of failing.
+        for malformed in ["====", "AQID====", "AQIDBA======"] {
+            assert!(
+                decode_base64(malformed).is_err(),
+                "expected {malformed:?} to be rejected"
+            );
+        }
+
+        // ...so a garbage header no longer yields an empty key.
+        let mut headers = HeaderMap::new();
+        headers.insert(&HEADER_IC_AUTH_PUBKEY, "====".parse().unwrap());
+        assert_eq!(extract_data(&headers, &HEADER_IC_AUTH_PUBKEY), None);
+    }
+
     #[test]
     fn test_extract_user_defaults_to_anonymous() {
         let mut headers = HeaderMap::new();
@@ -1197,7 +1405,11 @@ mod tests {
         assert!(err.contains("Delegation chain length exceeds the limit"));
     }
 
-    #[cfg(any())]
+    // The recorded canister-signature fixture below no longer verifies
+    // ("signature entry not found") and needs regenerating against a live
+    // subnet. It is kept compiling so the rot stays visible; it was previously
+    // hidden behind `#[cfg(any())]`, where it silently stopped building.
+    #[ignore = "stale canister-signature fixture, needs regenerating"]
     #[test]
     fn test_verify_delegation_chain() {
         let user_pubkey = hex::decode(
@@ -1214,6 +1426,7 @@ mod tests {
                     ).unwrap().into(),
                     expiration: 1746365411593000000,
                     targets: None,
+                    permissions: None,
                 },
                 signature: hex::decode(
                     "D9D9F7A26B63657274696669636174655904AFD9D9F7A36474726565830183018301820458207F795EAF211FB3DA321D2291429BAD43A869A1CCFD761FF5A35F1A362322A1F483024863616E697374657283018301830183024A000000000000000701018301830183024E6365727469666965645F64617461820358201BD26E2A134BB173ACE579802B2BD138D28B3307CE5415BAD1304EDC8EB6A5E182045820D8F64F7AFCA6A55D4EE6DED9B0200BAC6651CAF4C7A1920212B5A03C9BF1DF3682045820F5ECD4D3EDCD85DE4C3B07B8A8D77F69DEFCB5BD652071FFD46B2A6604029112820458205085E5811DEACD817B4FF38A37C93B8421B7DDC92E5489FDF0D3F5CF36E320728204582032698C8D6A87E6831B3E8AA11641F27E77B692C6F866FD3D9D3E917EA570515682045820F7C9916E3BDEB2AC59E18441EBEFDDA60B801A91F8508B4F1B2ADA5B7F62AAA682045820989249384F8855B851E3F07C55E66DEFA4719612B1D9565E4C2B47918F902240830182045820FBF74833516364406FEC8290DFB4593E369120B408F757754CF11E96DF87AA8D83024474696D658203498CF3BBB0EDC2959E18697369676E61747572655830AF6204D323E367981055D0FB24E03070BDD6EC0D1BFABE2E3408B9C4792F1D4C44FE49A3AE9FD6ABD53D53DCF38E0E0E6A64656C65676174696F6EA2697375626E65745F6964581D43DCAF1180DB82FDA708CE3AC7A03A6060ABDE13E9546C60E8CCE65D026B6365727469666963617465590294D9D9F7A264747265658301820458200E077A1AA8E3A69E473446FB605EF74212198EC90D4D0010B3DC091AE3F01B798301830182045820954285DD391C0258F30BD79123B51AB939B93982F24426FE94E376FC13F5D3D38302467375626E6574830183018301820458200985315BBE905B7F9336D7064793905B005689F3C9C2A21AD9A31FBE6CDD5599830182045820466A70286CF9ACE9801CA53E22AF6EE059A094FD60498606D484B6854058307D83018301820458208B2F6C15078AE4D3B93470915CA53E373327F37EA74BA1B8177D986BB79B31AE8302581D43DCAF1180DB82FDA708CE3AC7A03A6060ABDE13E9546C60E8CCE65D02830183024F63616E69737465725F72616E67657382035832D9D9F782824A000000000000000701014A00000000000000070101824A000000000210000001014A00000000021FFFFF010183024A7075626C69635F6B657982035885308182301D060D2B0601040182DC7C0503010201060C2B0601040182DC7C050302010361008819AAA868DA353E3451BB97675FFFAA711E3C1C1230E39E1FEEB0AF9FE03E67C9393F08D796C1E42B528ABB5FCB4159199284B00096F6DAFA93B4711F1AC65F594B67CE2C0B35710E0391C5424CB754779A1C6084F6E77B584E7C8CF7FE9D89820458202C51DB7B5650B7A3DBBB8530A7449CC6F90144778B62F20F3C26D72E95E50698820458206961EF137C2AEE0B0467082EF6D3C12C03E93013B602A4CB6214270E484863F182045820EA6D87F551BD7F433852FA3F8697E653676C2DA59615618B39C50D74069123C983024474696D65820349A0BFA380BAC2959E18697369676E61747572655830B82F7761EC5C9A30672188D7A5F7EE82B540E51A86239C5A2A8E51DA6CB19CA3980DD8125440EC49C54865CED7EAA10F6474726565830182045820ECF5038E1037F1181243DAABBD82BE6045A5B0B9F1025C905FA339E2C1305608830243736967830183018204582029D9F6DAFC4411D79A0B7A64FCFF42FCE426974773A4178BA421DF59165D9E32830182045820ABD07F88910310B251F025105AEA620A46984E3D677A54EEC324134F6ED4DDD783018204582055D9BE42D0A247D96B4C67822E937EAD71567B5BE0A4965150F01D2AB51AC971830182045820CCB0E0C4819032E6C3C7B0E359F8A7297EED11A484FD7D8081CCA2461371E0328301830258206BB18EF359E4DBB2372D7C255BA9351BC862ACF06D9D2B14CDB1271EEFAA597E8302582015451785051A113622599AD74E94CC066EEF4BAC88AC36A42403C65CEDFFE8E0820340820458203A229EE09D8AC3B9C0540F596654FED78B3D5ABDD03657F66AD3240856214167820458206C0048C242D41CF83B77D782F6733B95B7AA137736741D05DACA0385D79BF466").unwrap().into()
@@ -1224,6 +1437,7 @@ mod tests {
                     ).unwrap().into(),
                     expiration: 1746365411593000000,
                     targets: None,
+                    permissions: None,
                 },
                 signature: hex::decode("18397232DD4AE43103E1884E956F91B44188E40A288DBCB73BF99DC27DBFAB1E1F0FAB76C44E0A0206F34887D5197B46C2D57876B0DB4C28E97967FDA8807908").unwrap().into(),
                 }];

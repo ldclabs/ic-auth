@@ -6,6 +6,16 @@ use serde_bytes::ByteBuf;
 use sha2::{Digest, Sha256};
 
 pub const IC_STATE_ROOT_DOMAIN_SEPARATOR: &[u8; 14] = b"\x0Dic-state-root";
+
+/// Default freshness window applied to a canister signature's certificate.
+///
+/// [`verify_canister_sig`] uses this when the caller passes `None`, accepting a
+/// certificate whose `/time` is within 47 days of `current_time_ns` in either
+/// direction. That is far more permissive than the 5 minutes
+/// `ic-certificate-verification` uses in its own tests: it lets a captured
+/// certificate keep verifying for weeks, so the delegation `expiration` — not
+/// certificate freshness — is what bounds the replay window. Pass an explicit
+/// `allowed_certificate_time_offset_ns` to tighten it.
 pub const MAX_CERT_TIME_OFFSET_NS: u128 = 47 * 24 * 3600 * 1_000_000_000; // 47 days
 
 use ic_canister_sig_creation::CanisterSigPublicKey;
