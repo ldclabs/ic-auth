@@ -6,8 +6,10 @@ RUN apt-get update \
 
 WORKDIR /build
 COPY rs ./rs
-COPY Cargo.toml ./
-RUN cargo build --release -p ic_auth_verify_server
+# Cargo.lock must be copied too: without it cargo re-resolves every dependency
+# at image build time, so the published image is not reproducible from a commit.
+COPY Cargo.toml Cargo.lock ./
+RUN cargo build --release --locked -p ic_auth_verify_server
 
 FROM debian:bookworm-slim AS runtime
 

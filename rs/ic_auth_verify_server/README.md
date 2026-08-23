@@ -11,7 +11,7 @@ Returns service metadata. The response format is selected from `Accept` or `Cont
 ```json
 {
   "name": "ic_auth_verify_server",
-  "version": "0.9.1"
+  "version": "0.10.1"
 }
 ```
 
@@ -39,12 +39,12 @@ Successful response:
 }
 ```
 
-The endpoint returns `400` for malformed payloads, `401` for failed verification, and `406`/`415` for unsupported content negotiation.
+The endpoint returns `400` for malformed payloads, `401` for failed verification, and `415` when the request `Content-Type` is neither JSON nor CBOR.
 
 ## Content Types
 
-- Request bodies: `application/json`, `application/cbor`, or structured suffixes such as `application/vnd.example+cbor`.
-- Response bodies: selected as JSON or CBOR from the request format or `Accept` header.
+- Request bodies: selected from `Content-Type` only — `application/json`, `application/cbor`, or structured suffixes such as `application/vnd.example+cbor`. Anything else is rejected with `415`.
+- Response bodies: the request format when there is one, otherwise negotiated from `Accept`. Wildcard ranges (`*/*`, `application/*`) and a missing `Accept` both yield JSON; an `Accept` naming only unsupported types gets `406`.
 
 ## Running
 

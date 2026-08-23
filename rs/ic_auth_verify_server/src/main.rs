@@ -156,7 +156,7 @@ async fn post_verify(ct: Content<VerifyInput>) -> impl IntoResponse {
         Ok(se) => se,
         Err(err) => {
             return Content::Text(
-                format!("failed to decode signed_envelope Cbor: {err:?}"),
+                format!("failed to decode signed_envelope CBOR: {err}"),
                 Some(StatusCode::BAD_REQUEST),
             );
         }
@@ -238,8 +238,36 @@ mod tests {
         assert_eq!(value["name"], APP_NAME);
         assert_eq!(value["version"], APP_VERSION);
 
-        let (status, _, body) =
+        // curl sends `Accept: */*` and browsers send a `*/*;q=...` tail; both
+        // used to get `406` from the documented info endpoint.
+        for accept in ["*/*", "text/html,application/xhtml+xml,*/*;q=0.8"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(http::header::ACCEPT, accept.parse().unwrap());
+            let (status, response_headers, body) =
+                response_parts(get_information(headers).await.into_response()).await;
+            assert_eq!(status, StatusCode::OK, "Accept: {accept}");
+            assert_eq!(
+                response_headers[http::header::CONTENT_TYPE],
+                "application/json"
+            );
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["name"], APP_NAME);
+        }
+
+        // A request with no `Accept` accepts anything, so it gets JSON too.
+        let (status, response_headers, _) =
             response_parts(get_information(HeaderMap::new()).await.into_response()).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            response_headers[http::header::CONTENT_TYPE],
+            "application/json"
+        );
+
+        // Only an `Accept` that names nothing supported is still a 406.
+        let mut headers = HeaderMap::new();
+        headers.insert(http::header::ACCEPT, "application/xml".parse().unwrap());
+        let (status, _, body) =
+            response_parts(get_information(headers).await.into_response()).await;
         assert_eq!(status, StatusCode::NOT_ACCEPTABLE);
         assert_eq!(
             body,
@@ -301,7 +329,7 @@ mod tests {
         assert!(
             std::str::from_utf8(&body)
                 .unwrap()
-                .contains("failed to decode signed_envelope Cbor")
+                .contains("failed to decode signed_envelope CBOR")
         );
 
         let (mut input, _) = signed_verify_input();

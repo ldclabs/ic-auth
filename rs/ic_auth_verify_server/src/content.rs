@@ -33,29 +33,80 @@ pub enum Content<T> {
 }
 
 impl Content<()> {
-    /// Infers the preferred content format from `Content-Type` first, then
-    /// `Accept`.
+    /// Picks the response format from `Content-Type` first, then `Accept`.
+    ///
+    /// A request without an `Accept` header accepts any media type (RFC 9110
+    /// 12.5.1) and gets JSON, as does a wildcard range.
     pub fn from(headers: &HeaderMap) -> Self {
         if let Some(ct) = Self::from_content_type(headers) {
             return ct;
         }
 
-        if let Some(accept) = headers.get(header::ACCEPT)
-            && let Ok(accept) = accept.to_str()
-        {
-            if accept.contains(CONTENT_TYPE_CBOR) {
-                return Content::Cbor((), None);
+        match headers.get(header::ACCEPT).map(HeaderValue::to_str) {
+            Some(Ok(accept)) => Self::from_accept(accept),
+            // An unreadable `Accept` is the client's own error, so report it
+            // rather than guessing a format for it.
+            Some(Err(_)) => Content::Other("unknown".to_string(), None),
+            None => Content::Json((), None),
+        }
+    }
+
+    /// Selects the best format offered by an `Accept` header value.
+    ///
+    /// Media ranges are matched as whole types with their q-values honoured,
+    /// rather than by substring: `application/cbor;q=0` is a refusal, not a
+    /// request for CBOR, and `application/cbor-seq` is its own type. Wildcards
+    /// (`*/*`, `application/*`) resolve to JSON, so ordinary clients such as
+    /// curl and browsers get a readable body instead of `406`.
+    fn from_accept(accept: &str) -> Self {
+        // Lower rank wins ties, preserving the previous CBOR > JSON > text
+        // preference for a client that offers several formats equally.
+        let mut best: Option<(f32, u8)> = None;
+        for range in accept.split(',') {
+            let range = range.trim();
+            if range.is_empty() {
+                continue;
             }
-            if accept.contains(CONTENT_TYPE_JSON) {
-                return Content::Json((), None);
+            let Ok(mime) = range.parse::<mime::Mime>() else {
+                continue;
+            };
+            let quality = match mime.get_param("q") {
+                Some(q) => match q.as_str().parse::<f32>() {
+                    Ok(q) if q.is_finite() => q,
+                    _ => continue,
+                },
+                None => 1.0,
+            };
+            if quality <= 0.0 {
+                continue;
             }
-            if accept.contains(CONTENT_TYPE_TEXT) {
-                return Content::Text("".to_string(), None);
+
+            let rank = match (mime.type_(), mime.subtype()) {
+                (mime::APPLICATION, mime::STAR) | (mime::STAR, _) => 1,
+                (mime::APPLICATION, sub) => {
+                    if sub == "cbor" || mime.suffix().is_some_and(|name| name == "cbor") {
+                        0
+                    } else if sub == "json" || mime.suffix().is_some_and(|name| name == "json") {
+                        1
+                    } else {
+                        continue;
+                    }
+                }
+                (mime::TEXT, sub) if sub == mime::PLAIN || sub == mime::STAR => 2,
+                _ => continue,
+            };
+
+            if best.is_none_or(|(q, r)| quality > q || (quality == q && rank < r)) {
+                best = Some((quality, rank));
             }
-            return Content::Other(accept.to_string(), None);
         }
 
-        Content::Other("unknown".to_string(), None)
+        match best {
+            Some((_, 0)) => Content::Cbor((), None),
+            Some((_, 1)) => Content::Json((), None),
+            Some((_, _)) => Content::Text("".to_string(), None),
+            None => Content::Other(accept.to_string(), None),
+        }
     }
 
     /// Parses only the `Content-Type` header.
@@ -83,9 +134,15 @@ where
 {
     type Rejection = Response;
 
+    /// Decodes the body using the request's own `Content-Type`.
+    ///
+    /// `Accept` is deliberately not consulted here: it negotiates the
+    /// *response*, and letting it pick the request parser meant a body sent as
+    /// `text/plain` was parsed as JSON whenever the client happened to accept
+    /// JSON.
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match Content::from(req.headers()) {
-            Content::Json(_, _) => {
+        match Content::from_content_type(req.headers()) {
+            Some(Content::Json(_, _)) => {
                 let body = Bytes::from_request(req, state)
                     .await
                     .map_err(IntoResponse::into_response)?;
@@ -95,7 +152,7 @@ where
                 })?;
                 Ok(Self::Json(value, None))
             }
-            Content::Cbor(_, _) => {
+            Some(Content::Cbor(_, _)) => {
                 let body = Bytes::from_request(req, state)
                     .await
                     .map_err(IntoResponse::into_response)?;
@@ -217,8 +274,70 @@ mod tests {
         headers.insert(header::ACCEPT, "application/xml".parse().unwrap());
         assert!(matches!(Content::from(&headers), Content::Other(_, None)));
 
+        // No `Accept` means any media type is acceptable (RFC 9110 12.5.1).
         headers.clear();
-        assert!(matches!(Content::from(&headers), Content::Other(_, None)));
+        assert!(matches!(Content::from(&headers), Content::Json((), None)));
+    }
+
+    #[test]
+    fn accept_wildcards_and_quality_values_are_honoured() {
+        let pick = |accept: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(header::ACCEPT, accept.parse().unwrap());
+            Content::from(&headers)
+        };
+
+        // Wildcards resolve to JSON rather than failing negotiation, so curl
+        // (`*/*`) and browsers get a readable body instead of `406`.
+        assert!(matches!(pick("*/*"), Content::Json((), None)));
+        assert!(matches!(pick("application/*"), Content::Json((), None)));
+        assert!(matches!(
+            pick("text/html,application/xhtml+xml,*/*;q=0.8"),
+            Content::Json((), None)
+        ));
+
+        // q-values decide, instead of the order the code happens to check in.
+        assert!(matches!(
+            pick("application/json;q=0.9, application/cbor;q=0.1"),
+            Content::Json((), None)
+        ));
+        assert!(matches!(
+            pick("application/json;q=0.1, application/cbor;q=0.9"),
+            Content::Cbor((), None)
+        ));
+        // `q=0` is a refusal, not a request.
+        assert!(matches!(
+            pick("application/cbor;q=0, application/json"),
+            Content::Json((), None)
+        ));
+        assert!(matches!(
+            pick("application/cbor;q=0"),
+            Content::Other(_, None)
+        ));
+
+        // Equal quality keeps the historical CBOR > JSON > text preference.
+        assert!(matches!(
+            pick("application/json, application/cbor"),
+            Content::Cbor((), None)
+        ));
+        assert!(matches!(pick("text/plain"), Content::Text(_, None)));
+
+        // A distinct type that merely contains a supported name is not a match.
+        assert!(matches!(
+            pick("application/cbor-seq"),
+            Content::Other(_, None)
+        ));
+        assert!(matches!(pick("application/xml"), Content::Other(_, None)));
+        // Structured suffixes still work.
+        assert!(matches!(
+            pick("application/vnd.example+cbor"),
+            Content::Cbor((), None)
+        ));
+        // Malformed ranges are skipped rather than aborting negotiation.
+        assert!(matches!(
+            pick("not a mime, application/json"),
+            Content::Json((), None)
+        ));
     }
 
     #[test]
@@ -299,6 +418,18 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let request = Request::builder().body(Body::empty()).unwrap();
+        let response = Content::<Payload>::from_request(request, &())
+            .await
+            .unwrap_err();
+        assert_eq!(response.status(), StatusCode::UNSUPPORTED_MEDIA_TYPE);
+
+        // `Accept` describes the response and must not choose the request
+        // parser: a `text/plain` body is rejected even when JSON is accepted.
+        let request = Request::builder()
+            .header(header::CONTENT_TYPE, CONTENT_TYPE_TEXT)
+            .header(header::ACCEPT, CONTENT_TYPE_JSON)
+            .body(Body::from(r#"{"value":"hello"}"#))
+            .unwrap();
         let response = Content::<Payload>::from_request(request, &())
             .await
             .unwrap_err();
