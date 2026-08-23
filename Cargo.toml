@@ -40,3 +40,12 @@ ic-agent = "0.49"
 simple_asn1 = "0.6"
 xid = "1.1"
 url = "2.5"
+
+[profile.release]
+# `strip` removes the symbol table, which dominates the binary size, and
+# fat LTO plus a single codegen unit trims the rest. `panic` is deliberately
+# left at "unwind": with "abort" a panic in one request handler would take the
+# whole server down instead of just that connection.
+lto = true
+codegen-units = 1
+strip = true

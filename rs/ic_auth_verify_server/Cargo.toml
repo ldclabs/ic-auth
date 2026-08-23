@@ -11,8 +11,12 @@ license.workspace = true
 
 [dependencies]
 ic_auth_types = { path = "../ic_auth_types", version = "0.10" }
+# Only `envelope` is needed to verify: `full` would add `identity`, pulling in
+# ic-agent -> reqwest -> rustls -> aws-lc-sys. This server never opens an
+# outbound connection, so that is an unused HTTP+TLS stack (and a C dependency)
+# linked into the binary. The tests do need it, so they enable it below.
 ic_auth_verifier = { path = "../ic_auth_verifier", version = "0.10", features = [
-  "full",
+  "envelope",
 ] }
 axum-core = "0.5"
 axum = { version = "0.8", features = [
@@ -36,3 +40,6 @@ structured-logger = "1"
 log = { version = "0.4", features = ["kv_serde"] }
 
 [dev-dependencies]
+ic_auth_verifier = { path = "../ic_auth_verifier", version = "0.10", features = [
+  "full",
+] }

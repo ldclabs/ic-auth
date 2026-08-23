@@ -62,8 +62,13 @@ SOCKET_ADDR=0.0.0.0:8080 cargo run -p ic_auth_verify_server
 
 ```bash
 docker build -f rs/ic_auth_verify_server/Dockerfile -t ic_auth_verify_server .
-docker run --rm -p 8080:8080 -e SOCKET_ADDR=0.0.0.0:8080 ic_auth_verify_server
+docker run --rm -p 8080:8080 ic_auth_verify_server
 ```
+
+The image is a statically linked musl binary on `scratch` — roughly 3 MB, with
+no shell, no package manager, and no writable state. It runs as UID 65532 and
+sets `SOCKET_ADDR=0.0.0.0:8080` so the port is reachable from the host; override
+it to bind elsewhere.
 
 ## License
 
