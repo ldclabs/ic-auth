@@ -257,15 +257,10 @@ impl serde::Serialize for Xid {
 /// Handles both string and byte array representations
 impl<'de> serde::Deserialize<'de> for Xid {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        use serde::de::Error;
         if deserializer.is_human_readable() {
-            deserializer
-                .deserialize_str(deserialize::XidVisitor)
-                .map_err(D::Error::custom)
+            deserializer.deserialize_str(deserialize::XidVisitor)
         } else {
-            deserializer
-                .deserialize_bytes(deserialize::XidVisitor)
-                .map_err(D::Error::custom)
+            deserializer.deserialize_bytes(deserialize::XidVisitor)
         }
     }
 }

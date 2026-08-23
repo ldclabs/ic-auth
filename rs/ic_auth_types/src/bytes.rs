@@ -141,7 +141,10 @@ impl ByteBufB64 {
 pub struct ByteArrayB64<const N: usize>(pub [u8; N]);
 
 impl<const N: usize> ByteArrayB64<N> {
-    /// Construct a new, empty `ByteArrayB64`.
+    /// Construct a new `ByteArrayB64` with all `N` bytes set to zero.
+    ///
+    /// A fixed-size array has no empty state, so this is a zeroed value rather
+    /// than an uninitialized one; `is_empty` reports `N == 0`, not the contents.
     pub fn new() -> Self {
         ByteArrayB64::default()
     }
@@ -529,27 +532,27 @@ impl<'a> BytesB64<'a> {
     }
 }
 
-impl<'a> Display for BytesB64<'a> {
+impl Display for BytesB64<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{B64_PREFIX}{}", BASE64_URL_SAFE.encode(self.0.as_ref()))
     }
 }
 
-impl<'a> Debug for BytesB64<'a> {
+impl Debug for BytesB64<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "BytesB64({self})")
     }
 }
 
 /// Implements `AsRef<[u8]>` for `BytesB64` to allow borrowing the underlying byte slice.
-impl<'a> AsRef<[u8]> for BytesB64<'a> {
+impl AsRef<[u8]> for BytesB64<'_> {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
     }
 }
 
 /// Implements `Deref` for `BytesB64` to allow transparent access to the underlying byte slice.
-impl<'a> Deref for BytesB64<'a> {
+impl Deref for BytesB64<'_> {
     type Target = [u8];
 
     fn deref(&self) -> &Self::Target {
@@ -565,7 +568,7 @@ impl<'a> From<&'a [u8]> for BytesB64<'a> {
 }
 
 /// Implements `From<Vec<u8>>` for `BytesB64` to allow easy conversion from a byte vector.
-impl<'a> From<Vec<u8>> for BytesB64<'a> {
+impl From<Vec<u8>> for BytesB64<'_> {
     fn from(v: Vec<u8>) -> Self {
         BytesB64(Cow::Owned(v))
     }
@@ -607,7 +610,7 @@ impl<'a, const N: usize> From<&'a ByteArrayB64<N>> for BytesB64<'a> {
 }
 
 /// Implements `FromStr` for `BytesB64` to allow easy conversion from a Base64URL encoded string.
-impl<'a> FromStr for BytesB64<'a> {
+impl FromStr for BytesB64<'_> {
     type Err = base64::DecodeError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let v = try_from_base64(s)?;
@@ -616,7 +619,7 @@ impl<'a> FromStr for BytesB64<'a> {
 }
 
 /// Implements `From<&str>` for `BytesB64` to allow easy conversion from a Base64URL encoded string.
-impl<'a> TryFrom<&str> for BytesB64<'a> {
+impl TryFrom<&str> for BytesB64<'_> {
     type Error = base64::DecodeError;
 
     fn try_from(s: &str) -> Result<Self, Self::Error> {
@@ -628,6 +631,14 @@ fn try_from_base64(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
     // Accept both the prefixed (`b64:...`) and bare forms for backward compatibility.
     let s = s.strip_prefix(B64_PREFIX).unwrap_or(s);
     let v = s.trim_end_matches('=');
+    // Padding is optional here, but it must still be padding: at most two `=`,
+    // and only where the final quantum is short. Without this check `"===="`
+    // and `"AQID===="` decode as if the run of `=` were not there, turning
+    // malformed input into a silently accepted (often empty) byte string.
+    let pad = s.len() - v.len();
+    if pad > 2 || (pad > 0 && !matches!(v.len() % 4, 2 | 3)) {
+        return Err(base64::DecodeError::InvalidPadding);
+    }
     if v.contains(['+', '/']) {
         BASE64_STANDARD_NO_PAD.decode(v)
     } else {
@@ -637,7 +648,7 @@ fn try_from_base64(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
 
 /// Implements `serde::Serialize` for `BytesB64`.
 /// Uses Base64URL encoding for human-readable formats and raw bytes for binary formats.
-impl<'a> serde::Serialize for BytesB64<'a> {
+impl serde::Serialize for BytesB64<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
             format!("{B64_PREFIX}{}", BASE64_URL_SAFE.encode(self.0.as_ref())).serialize(serializer)
@@ -649,7 +660,7 @@ impl<'a> serde::Serialize for BytesB64<'a> {
 
 /// Implements `serde::Deserialize` for `BytesB64`.
 /// Handles both Base64URL encoded strings (for human-readable formats) and raw bytes (for binary formats).
-impl<'de, 'a> serde::Deserialize<'de> for BytesB64<'a> {
+impl<'de> serde::Deserialize<'de> for BytesB64<'_> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let visitor = deserialize::BytesB64Visitor(core::marker::PhantomData);
         if deserializer.is_human_readable() {
@@ -1027,6 +1038,30 @@ mod tests {
         let s = BASE64_URL_SAFE.encode(&data);
         let err = ByteArrayB64::<4>::from_str(&s).unwrap_err();
         assert_eq!(err, base64::DecodeError::InvalidLength(5));
+    }
+
+    #[test]
+    fn test_from_str_rejects_malformed_padding() {
+        // Optional padding stays accepted, including the short-by-one form the
+        // crate has always tolerated.
+        assert_eq!(ByteBufB64::from_str("AQIDBA==").unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(ByteBufB64::from_str("AQIDBA=").unwrap(), vec![1, 2, 3, 4]);
+        assert_eq!(ByteBufB64::from_str("AQIDBA").unwrap(), vec![1, 2, 3, 4]);
+        assert!(ByteBufB64::from_str("").unwrap().is_empty());
+        assert!(ByteBufB64::from_str(B64_PREFIX).unwrap().is_empty());
+
+        // Runs of `=` are not a substitute for data: these used to decode to
+        // empty bytes / a truncated buffer instead of failing.
+        for malformed in ["=", "====", "b64:====", "AQID=", "AQID====", "AQIDBA======"] {
+            assert_eq!(
+                ByteBufB64::from_str(malformed).unwrap_err(),
+                base64::DecodeError::InvalidPadding,
+                "expected {malformed:?} to be rejected"
+            );
+        }
+        assert!(ByteArrayB64::<0>::from_str("====").is_err());
+        assert!(BytesB64::from_str("====").is_err());
+        assert!(serde_json::from_str::<ByteBufB64>(r#""====""#).is_err());
     }
 
     #[test]

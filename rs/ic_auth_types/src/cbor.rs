@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-use serde::{de::DeserializeOwned, ser};
+use serde::{Deserialize, de::DeserializeOwned, ser};
 use std::io::Write;
 
 /// Serializes a value as CBOR into a new `Vec<u8>`.
@@ -18,22 +18,45 @@ pub fn cbor_into<T: ?Sized + ser::Serialize, W: Write>(value: &T, w: W) -> Resul
     cbor2::to_writer(value, w).map_err(|err| err.to_string())
 }
 
-/// Deserializes one CBOR item from a byte slice.
+/// Deserializes exactly one CBOR item from a byte slice.
 ///
 /// The first pass uses typed `cbor2` deserialization. If that fails, the
 /// function decodes through [`cbor2::Value`] and then asks the value to
 /// deserialize into `T`. That fallback preserves IC/Candid-specific custom
 /// deserialization paths, including [`candid::Principal`], while keeping the
 /// call sites independent of the CBOR backend.
+///
+/// `bytes` must contain the item and nothing else. `cbor2::from_slice` stops
+/// at the end of the first item and ignores whatever follows, which would let
+/// a signed payload carry arbitrary appended bytes without changing the value
+/// it decodes to. Trailing data is therefore rejected here.
 pub fn cbor_from_slice<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
-    match cbor2::from_slice(bytes) {
-        Ok(value) => Ok(value),
+    let mut de = cbor2::de::Deserializer::from_slice(bytes);
+    match T::deserialize(&mut de) {
+        Ok(value) => {
+            reject_trailing(de.offset(), bytes.len())?;
+            Ok(value)
+        }
         Err(primary) => {
-            let value =
-                cbor2::from_slice::<cbor2::Value>(bytes).map_err(|_| format!("{primary:?}"))?;
-            value.deserialized().map_err(|_| format!("{primary:?}"))
+            let mut de = cbor2::de::Deserializer::from_slice(bytes);
+            let value = cbor2::Value::deserialize(&mut de).map_err(|_| primary.to_string())?;
+            reject_trailing(de.offset(), bytes.len())?;
+            value
+                .deserialized()
+                .map_err(|fallback| format!("{primary}; via CBOR value: {fallback}"))
         }
     }
+}
+
+/// Fails when a CBOR item did not consume the whole input slice.
+fn reject_trailing(offset: usize, len: usize) -> Result<(), String> {
+    if offset < len {
+        return Err(format!(
+            "{} trailing bytes after the CBOR item",
+            len - offset
+        ));
+    }
+    Ok(())
 }
 
 /// Serializes a value into a new `Vec<u8>` using RFC 8949 deterministic CBOR.
@@ -171,6 +194,50 @@ mod tests {
             deterministic_cbor_into(&ToggleSerialize(true), Vec::new())
                 .unwrap_err()
                 .contains("intentional")
+        );
+    }
+
+    #[test]
+    fn test_cbor_from_slice_rejects_trailing_bytes() {
+        let clean = cbor_into_vec(&42u8).unwrap();
+        assert_eq!(cbor_from_slice::<u8>(&clean).unwrap(), 42);
+
+        // A second CBOR item, or arbitrary junk, appended after the first item
+        // must not be silently dropped: otherwise a signed payload has
+        // unboundedly many byte encodings that decode to the same value.
+        let mut appended = clean.clone();
+        appended.extend_from_slice(&cbor_into_vec(&7u8).unwrap());
+        assert!(
+            cbor_from_slice::<u8>(&appended)
+                .unwrap_err()
+                .contains("trailing")
+        );
+
+        let mut junk = clean;
+        junk.extend_from_slice(&[0xff, 0xff, 0xff]);
+        assert!(
+            cbor_from_slice::<u8>(&junk)
+                .unwrap_err()
+                .contains("trailing")
+        );
+
+        // The `cbor2::Value` fallback path enforces the same rule.
+        #[derive(Debug, Deserialize)]
+        struct PrincipalPayload {
+            #[allow(dead_code)]
+            principal: Principal,
+        }
+        let mut data = cbor_into_vec(&Value::Map(vec![(
+            Value::from("principal"),
+            Value::Bytes(vec![4]),
+        )]))
+        .unwrap();
+        assert!(cbor_from_slice::<PrincipalPayload>(&data).is_ok());
+        data.push(0xf6);
+        assert!(
+            cbor_from_slice::<PrincipalPayload>(&data)
+                .unwrap_err()
+                .contains("trailing")
         );
     }
 
