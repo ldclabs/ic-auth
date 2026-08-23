@@ -11,7 +11,7 @@ Returns service metadata. The response format is selected from `Accept` or `Cont
 ```json
 {
   "name": "ic_auth_verify_server",
-  "version": "0.10.1"
+  "version": "<crate version>"
 }
 ```
 
