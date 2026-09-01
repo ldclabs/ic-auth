@@ -25,7 +25,7 @@ simple_asn1 = { workspace = true }
 ic-canister-sig-creation = { workspace = true }
 ic-representation-independent-hash = { workspace = true }
 ic-certification = { workspace = true }
-ic-certificate-verification = { workspace = true }
+ic-verify-bls-signature = { workspace = true }
 arc-swap = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }

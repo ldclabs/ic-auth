@@ -1,11 +1,8 @@
 use candid::Principal;
-use ic_certificate_verification::VerifyCertificate;
 use ic_certification::{Certificate, HashTree, SubtreeLookupResult, leaf};
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 use sha2::{Digest, Sha256};
-
-pub const IC_STATE_ROOT_DOMAIN_SEPARATOR: &[u8; 14] = b"\x0Dic-state-root";
 
 /// Default freshness window applied to a canister signature's certificate.
 ///
@@ -16,9 +13,15 @@ pub const IC_STATE_ROOT_DOMAIN_SEPARATOR: &[u8; 14] = b"\x0Dic-state-root";
 /// certificate keep verifying for weeks, so the delegation `expiration` — not
 /// certificate freshness — is what bounds the replay window. Pass an explicit
 /// `allowed_certificate_time_offset_ns` to tighten it.
+///
+/// The 5 minutes referred to above is what the reference implementation this
+/// crate's [`verify_certificate`](crate::verify_certificate) is modelled on
+/// uses in its own tests.
 pub const MAX_CERT_TIME_OFFSET_NS: u128 = 47 * 24 * 3600 * 1_000_000_000; // 47 days
 
 use ic_canister_sig_creation::CanisterSigPublicKey;
+
+use crate::certificate_verification::{parse_certificate_cbor, verify_certificate};
 
 /// Verifies that `signature` is a valid canister signature on `message`.
 /// <https://internetcomputer.org/docs/current/references/ic-interface-spec#canister-signatures>
@@ -37,15 +40,13 @@ pub fn verify_canister_sig(
     let certificate =
         check_certified_data_and_get_certificate(&signature, &public_key.canister_id)?;
 
-    certificate
-        .verify(
-            public_key.canister_id.as_slice(),
-            ic_root_public_key_raw,
-            current_time_ns,
-            &allowed_certificate_time_offset_ns.unwrap_or(MAX_CERT_TIME_OFFSET_NS),
-        )
-        .map_err(|err| format!("{err:?}"))?;
-    Ok(())
+    verify_certificate(
+        &certificate,
+        public_key.canister_id.as_slice(),
+        ic_root_public_key_raw,
+        *current_time_ns,
+        allowed_certificate_time_offset_ns.unwrap_or(MAX_CERT_TIME_OFFSET_NS),
+    )
 }
 
 // Check that signature.certificate's tree contains for the canister identified by
@@ -104,16 +105,6 @@ fn parse_signature_cbor(signature_cbor: &[u8]) -> Result<CanisterSignature, Stri
     }
     serde_cbor::from_slice::<CanisterSignature>(signature_cbor)
         .map_err(|e| format!("failed to parse signature CBOR: {e}"))
-}
-
-fn parse_certificate_cbor(certificate_cbor: &[u8]) -> Result<Certificate, String> {
-    // 0xd9d9f7 (cf. https://tools.ietf.org/html/rfc7049#section-2.4.5) is the
-    // self-describing CBOR tag required to be present by the interface spec.
-    if certificate_cbor.len() < 3 || certificate_cbor[0..3] != [0xd9, 0xd9, 0xf7] {
-        return Err("certificate CBOR doesn't have a self-describing tag".to_string());
-    }
-    serde_cbor::from_slice::<Certificate>(certificate_cbor)
-        .map_err(|e| format!("failed to parse certificate CBOR: {e}"))
 }
 
 const SHA256_DIGEST_LEN: usize = 32;
