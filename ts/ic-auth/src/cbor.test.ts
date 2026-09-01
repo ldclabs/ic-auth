@@ -1,4 +1,4 @@
-import { bytesToHex } from '@noble/hashes/utils'
+import { bytesToHex } from '@noble/hashes/utils.js'
 import { assert, describe, it } from 'vitest'
 import { compareBytes, deterministicEncode } from './cbor.js'
 

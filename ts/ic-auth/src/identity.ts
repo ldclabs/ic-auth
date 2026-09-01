@@ -1,10 +1,10 @@
 import { SignIdentity } from '@icp-sdk/core/agent'
 import { DelegationChain, DelegationIdentity } from '@icp-sdk/core/identity'
-import { sha3_256 } from '@noble/hashes/sha3'
+import { sha3_256 } from '@noble/hashes/sha3.js'
 import { deterministicEncode } from './cbor.js'
 import { SignedEnvelopeCompact, toSignedDelegationCompact } from './types.js'
 
-export { sha3_256 } from '@noble/hashes/sha3'
+export { sha3_256 } from '@noble/hashes/sha3.js'
 
 export {
   DelegationIdentity,
