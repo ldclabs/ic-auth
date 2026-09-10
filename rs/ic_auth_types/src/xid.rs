@@ -1,6 +1,7 @@
 // Source code: https://github.com/kazk/xid-rs/blob/main/src/id.rs
 // The upstream generator is not usable in wasm32-unknown-unknown, so this
-// crate keeps the wire-compatible identifier type locally.
+// crate keeps the wire-compatible identifier type and an explicit-state
+// generator locally.
 
 use candid::CandidType;
 use core::{
@@ -29,6 +30,105 @@ pub struct Xid(pub [u8; RAW_LEN]);
 
 /// A constant representing an empty XID (all zeros)
 pub const EMPTY_XID: Xid = Xid([0u8; RAW_LEN]);
+
+/// A deterministic XID generator that does not require a system clock or RNG.
+///
+/// IDs contain a big-endian UNIX timestamp (4 bytes), a caller-provided
+/// fingerprint (5 bytes), and a big-endian counter (3 bytes). Each fingerprint
+/// must have a single allocation history: persist the state returned by
+/// [`Self::allocate`] atomically with the record using the ID, and serialize
+/// concurrent allocations. Reusing an old state can reissue IDs.
+#[derive(CandidType, Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+pub struct XidGenerator {
+    /// State format version. Currently only version 1 is supported.
+    pub profile_version: u8,
+    /// Stable namespace fingerprint, distinct for independent generators.
+    pub fingerprint: [u8; 5],
+    /// Highest UNIX timestamp used by a successful allocation, in seconds.
+    pub last_second: Option<u32>,
+    /// Next counter value; `1 << 24` means the current second is exhausted.
+    pub next_counter: u32,
+}
+
+/// An allocation failure that leaves the generator unchanged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum XidGeneratorError {
+    /// The persisted generator uses an unsupported state format.
+    StateConflict,
+    /// The supplied UNIX timestamp does not fit in 32 bits.
+    TimestampOutOfRange,
+    /// All 24-bit counter values for the current second have been used.
+    CapacityExceeded,
+}
+
+impl Display for XidGeneratorError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::StateConflict => "unsupported XID generator state version",
+            Self::TimestampOutOfRange => "XID timestamp is out of range",
+            Self::CapacityExceeded => "XID counter capacity exceeded",
+        })
+    }
+}
+
+impl std::error::Error for XidGeneratorError {}
+
+impl XidGenerator {
+    /// Creates a generator for a caller-defined namespace fingerprint.
+    ///
+    /// The caller is responsible for choosing distinct fingerprints for
+    /// independent generators, for example from an application/canister hash.
+    /// Do not recreate a generator for a fingerprint that has already issued IDs;
+    /// restore its persisted state instead.
+    pub fn new(fingerprint: [u8; 5]) -> Self {
+        Self {
+            profile_version: 1,
+            fingerprint,
+            last_second: None,
+            next_counter: 0,
+        }
+    }
+
+    /// Proposes an ID and the state to persist, without modifying `self`.
+    ///
+    /// `seconds` is a UNIX timestamp in seconds. Equal or earlier timestamps
+    /// retain the last timestamp and advance its counter, so clock rollback
+    /// cannot reissue IDs. A later second resets the counter to zero.
+    /// Exhaustion never wraps the counter; allocation can resume only when
+    /// the supplied timestamp exceeds the last used second.
+    ///
+    /// ```
+    /// use ic_auth_types::XidGenerator;
+    ///
+    /// let generator = XidGenerator::new([1, 2, 3, 4, 5]);
+    /// let (id, next) = generator.allocate(100)?;
+    /// let (later_id, next) = next.allocate(90)?;
+    /// assert!(id < later_id);
+    /// assert_eq!(next.last_second, Some(100));
+    /// # Ok::<(), ic_auth_types::XidGeneratorError>(())
+    /// ```
+    pub fn allocate(&self, seconds: u64) -> Result<(Xid, Self), XidGeneratorError> {
+        if self.profile_version != 1 {
+            return Err(XidGeneratorError::StateConflict);
+        }
+        let now = u32::try_from(seconds).map_err(|_| XidGeneratorError::TimestampOutOfRange)?;
+        let mut next = self.clone();
+        if self.last_second.is_none_or(|last| now > last) {
+            next.last_second = Some(now);
+            next.next_counter = 0;
+        }
+        if next.next_counter >= 1 << 24 {
+            return Err(XidGeneratorError::CapacityExceeded);
+        }
+
+        let mut bytes = [0; RAW_LEN];
+        bytes[..4].copy_from_slice(&next.last_second.unwrap().to_be_bytes());
+        bytes[4..9].copy_from_slice(&next.fingerprint);
+        bytes[9..].copy_from_slice(&next.next_counter.to_be_bytes()[1..]);
+        next.next_counter += 1;
+        Ok((Xid(bytes), next))
+    }
+}
 
 /// Conversion from our Xid to the original xid crate's Id type
 /// Only available when the "xid" feature is enabled
@@ -355,6 +455,166 @@ mod tests {
         principal: Principal,
     }
 
+    #[test]
+    fn generator_layout_matches_xid_wire_format() {
+        let generator = XidGenerator {
+            last_second: Some(0x4d88e15b),
+            next_counter: 0x412dc9,
+            ..XidGenerator::new([0x60, 0xf4, 0x86, 0xe4, 0x28])
+        };
+        let before = generator.clone();
+        let (id, next) = generator.allocate(0x4d88e15b).unwrap();
+        assert_eq!(id.to_string(), "9m4e2mr0ui3e8a215n4g");
+        assert_eq!(next.next_counter, 0x412dca);
+        assert_eq!(generator, before);
+
+        #[cfg(feature = "xid")]
+        assert_eq!(id.xid().to_string(), id.to_string());
+    }
+
+    #[test]
+    fn generator_is_deterministic_and_preserves_namespace() {
+        let generator = XidGenerator::new([1, 2, 3, 4, 5]);
+        let (first, next) = generator.allocate(0).unwrap();
+        assert_eq!(
+            generator.allocate(0).unwrap(),
+            (first.clone(), next.clone())
+        );
+        assert_eq!(first.0, [0, 0, 0, 0, 1, 2, 3, 4, 5, 0, 0, 0]);
+        assert_eq!(next.last_second, Some(0));
+        assert_eq!(next.next_counter, 1);
+        assert_eq!(next.profile_version, 1);
+        assert_eq!(next.fingerprint, generator.fingerprint);
+        assert_eq!(generator.last_second, None);
+        assert_eq!(generator.next_counter, 0);
+        let (other, _) = XidGenerator::new([1, 2, 3, 4, 6]).allocate(0).unwrap();
+        assert_ne!(first, other);
+    }
+
+    #[test]
+    fn generator_survives_serialization_and_clock_rollback() {
+        let initial = XidGenerator::new([1, 2, 3, 4, 5]);
+        let (a, state) = initial.allocate(100).unwrap();
+        // Persist and restore both unused and active states in supported formats.
+        for original in [initial, state.clone()] {
+            let json = serde_json::to_vec(&original).unwrap();
+            let from_json: XidGenerator = serde_json::from_slice(&json).unwrap();
+            let cbor = crate::deterministic_cbor_into_vec(&original).unwrap();
+            let from_cbor: XidGenerator = cbor_from_slice(&cbor).unwrap();
+            let candid = candid::encode_one(&original).unwrap();
+            let from_candid: XidGenerator = candid::decode_one(&candid).unwrap();
+            for restored in [from_json, from_cbor, from_candid] {
+                assert_eq!(restored, original);
+                assert_eq!(restored.allocate(90), original.allocate(90));
+            }
+        }
+
+        let encoded = crate::deterministic_cbor_into_vec(&state).unwrap();
+        let state: XidGenerator = cbor_from_slice(&encoded).unwrap();
+        let (b, state) = state.allocate(90).unwrap();
+        let (c, state) = state.allocate(100).unwrap();
+        assert_eq!(state.last_second, Some(100));
+        assert_eq!(state.next_counter, 3);
+        let (d, state) = state.allocate(101).unwrap();
+        assert!(a < b && b < c && c < d);
+        assert!(a.to_string() < b.to_string());
+        assert!(b.to_string() < c.to_string());
+        assert!(c.to_string() < d.to_string());
+        assert_eq!(&b.0[9..], &[0, 0, 1]);
+        assert_eq!(&c.0[9..], &[0, 0, 2]);
+        assert_eq!(&d.0[9..], &[0, 0, 0]);
+        assert_eq!(state.last_second, Some(101));
+        assert_eq!(state.next_counter, 1);
+    }
+
+    #[test]
+    fn generator_counter_carries_without_wrapping() {
+        for counter in [0xff, 0xffff, (1 << 24) - 1] {
+            let generator = XidGenerator {
+                last_second: Some(100),
+                next_counter: counter,
+                ..XidGenerator::new([1; 5])
+            };
+            let (id, next) = generator.allocate(100).unwrap();
+            assert_eq!(&id.0[9..], &counter.to_be_bytes()[1..]);
+            assert_eq!(next.next_counter, counter + 1);
+            if counter < (1 << 24) - 1 {
+                let (after, _) = next.allocate(100).unwrap();
+                assert!(id < after);
+                assert_eq!(&after.0[9..], &(counter + 1).to_be_bytes()[1..]);
+            } else {
+                let encoded = crate::deterministic_cbor_into_vec(&next).unwrap();
+                let exhausted: XidGenerator = cbor_from_slice(&encoded).unwrap();
+                let before = exhausted.clone();
+                for seconds in [99, 100] {
+                    assert_eq!(
+                        exhausted.allocate(seconds),
+                        Err(XidGeneratorError::CapacityExceeded)
+                    );
+                    assert_eq!(exhausted, before);
+                }
+                let (after, next) = exhausted.allocate(101).unwrap();
+                assert!(id < after);
+                assert_eq!(&after.0[9..], &[0; 3]);
+                assert_eq!(next.next_counter, 1);
+                assert_eq!(next.last_second, Some(101));
+            }
+        }
+    }
+
+    #[test]
+    fn generator_rejects_invalid_timestamps_and_versions_without_mutating() {
+        let initial = XidGenerator::new([1; 5]);
+        let (id, active) = initial.allocate(u32::MAX as u64).unwrap();
+        assert_eq!(&id.0[..4], &[255; 4]);
+        let (next_id, _) = active.allocate(u32::MAX as u64).unwrap();
+        assert!(id < next_id);
+
+        for generator in [initial, active] {
+            let before = generator.clone();
+            for seconds in [u32::MAX as u64 + 1, u64::MAX] {
+                assert_eq!(
+                    generator.allocate(seconds),
+                    Err(XidGeneratorError::TimestampOutOfRange)
+                );
+                assert_eq!(generator, before);
+            }
+            for profile_version in [0, 2, u8::MAX] {
+                let invalid = XidGenerator {
+                    profile_version,
+                    ..generator.clone()
+                };
+                let before = invalid.clone();
+                assert_eq!(invalid.allocate(100), Err(XidGeneratorError::StateConflict));
+                assert_eq!(invalid, before);
+            }
+        }
+    }
+
+    #[test]
+    fn xid_roundtrips_all_bits_and_rejects_noncanonical_padding() {
+        for bit in 0..RAW_LEN * 8 {
+            let mut raw = [0; RAW_LEN];
+            raw[bit / 8] = 1 << (bit % 8);
+            let id = Xid(raw);
+            assert_eq!(id.to_string().parse::<Xid>().unwrap(), id);
+            let json = serde_json::to_vec(&id).unwrap();
+            assert_eq!(serde_json::from_slice::<Xid>(&json).unwrap(), id);
+            let cbor = crate::deterministic_cbor_into_vec(&id).unwrap();
+            assert_eq!(cbor_from_slice::<Xid>(&cbor).unwrap(), id);
+        }
+        let maximum = Xid([255; RAW_LEN]);
+        assert_eq!(maximum.to_string(), "vvvvvvvvvvvvvvvvvvvg");
+        assert_eq!(maximum.to_string().parse::<Xid>().unwrap(), maximum);
+        for &last in ENC {
+            let text = format!("0000000000000000000{}", last as char);
+            assert_eq!(text.parse::<Xid>().is_ok(), matches!(last, b'0' | b'g'));
+        }
+        for invalid in ["0000000000000000000A", "000000000000000000é"] {
+            assert!(invalid.parse::<Xid>().is_err());
+        }
+    }
+
     // https://github.com/rs/xid/blob/efa678f304ab65d6d57eedcb086798381ae22206/id_test.go#L101
     #[test]
     fn test_to_string() {
@@ -391,6 +651,40 @@ mod tests {
         );
         let t1: Test = cbor_from_slice(&data[..]).unwrap();
         assert_eq!(t, t1);
+    }
+
+    #[test]
+    fn test_xid_candid_matches_byte_vector() {
+        assert_eq!(Xid::ty(), Vec::<u8>::ty());
+
+        for raw in [
+            [0; RAW_LEN],
+            [255; RAW_LEN],
+            [
+                0x4d, 0x88, 0xe1, 0x5b, 0x60, 0xf4, 0x86, 0xe4, 0x28, 0x41, 0x2d, 0xc9,
+            ],
+        ] {
+            let xid = Xid(raw);
+            let bytes = raw.to_vec();
+            let encoded_xid = candid::encode_one(&xid).unwrap();
+            let encoded_bytes = candid::encode_one(&bytes).unwrap();
+
+            assert_eq!(encoded_xid, encoded_bytes);
+            assert_eq!(candid::decode_one::<Xid>(&encoded_xid).unwrap(), xid);
+            assert_eq!(candid::decode_one::<Xid>(&encoded_bytes).unwrap(), xid);
+            assert_eq!(candid::decode_one::<Vec<u8>>(&encoded_xid).unwrap(), bytes);
+        }
+    }
+
+    #[test]
+    fn test_xid_candid_rejects_invalid_byte_vector_lengths() {
+        for len in [0, RAW_LEN - 1, RAW_LEN + 1] {
+            let bytes = vec![0u8; len];
+            let encoded = candid::encode_one(&bytes).unwrap();
+
+            assert_eq!(candid::decode_one::<Vec<u8>>(&encoded).unwrap(), bytes);
+            assert!(candid::decode_one::<Xid>(&encoded).is_err());
+        }
     }
 
     #[test]
