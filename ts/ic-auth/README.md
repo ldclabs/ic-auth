@@ -1,46 +1,28 @@
-# @ldclabs/ic-auth
+# `@ldclabs/ic-auth`
 
 ![License](https://img.shields.io/npm/l/@ldclabs/ic-auth)
 [![Test](https://github.com/ldclabs/ic-auth/actions/workflows/test.yml/badge.svg)](https://github.com/ldclabs/ic-auth/actions/workflows/test.yml)
-[![NPM version](http://img.shields.io/npm/v/@ldclabs/ic-auth.svg)](https://www.npmjs.com/package/@ldclabs/ic-auth)
+[![NPM version](https://img.shields.io/npm/v/@ldclabs/ic-auth.svg)](https://www.npmjs.com/package/@ldclabs/ic-auth)
 
-[IC-Auth](https://github.com/ldclabs/ic-auth) is a web authentication system based on Internet Computer identities.
-
-`@ldclabs/ic-auth` is the TypeScript client SDK for IC-Auth. It provides compact envelope and delegation types, deterministic CBOR encoding, SHA3-256 message digests, Base64URL helpers, and signing helpers built on `@icp-sdk/core` identities.
+The TypeScript signing SDK for [IC-Auth](../../README.md). It provides deterministic CBOR, compact envelope and delegation types, SHA3-256 message digests, Base64URL helpers, and identity signing through `@icp-sdk/core`. Signature verification is provided by the [Rust verifier](../../rs/ic_auth_verifier/README.md) or [HTTP service](../../rs/ic_auth_verify_server/README.md).
 
 ## Installation
 
-Install the package using your favorite package manager:
-
 ```bash
-npm install @ldclabs/ic-auth
+npm install @ldclabs/ic-auth @icp-sdk/core @noble/hashes cborg
 ```
 
-or
+The package ships ES modules and TypeScript declarations. It supports browser applications and declares Node.js `>=20.0.0`. Its peer dependency ranges are:
 
-```bash
-yarn add @ldclabs/ic-auth
-```
+| Dependency | Range |
+| --- | --- |
+| `@icp-sdk/core` | `>=5.0.0` |
+| `@noble/hashes` | `>=1.8.0` |
+| `cborg` | `>=4.5.0` |
 
-The package expects these peer dependencies in the host project:
+The examples use top-level `await`, so run them as ES modules. The package has an independent release version from the Rust workspace; see [package.json](package.json).
 
-```json
-"peerDependencies": {
-  "@icp-sdk/core": ">=5.0.0",
-  "@noble/hashes": "^1.8.0",
-  "cborg": ">=4.5.0"
-}
-```
-
-## What It Exports
-
-- `deterministicEncode`, `decode`, `encode`, and `rfc8949EncodeOptions` from `cborg`.
-- `Delegation`, `SignedDelegation`, `SignedEnvelope`, and compact `p`/`s`/`h`/`d` wire forms.
-- Conversion helpers such as `toSignedEnvelope`, `toSignedEnvelopeCompact`, `toDelegationCompact`, and deep-link sign-in type converters.
-- `toDelegationIdentity`, `signArbitrary`, `signMessage`, `digestMessage`, and Base64URL helpers.
-- `DelegationIdentity`, `Ed25519KeyIdentity`, and `Ed25519PublicKey` re-exported from `@icp-sdk/core/identity`.
-
-## Sign a Message
+## Sign a structured message
 
 ```typescript
 import {
@@ -51,51 +33,107 @@ import {
   toDelegationIdentity
 } from '@ldclabs/ic-auth'
 
-async function main() {
-  const baseIdentity = Ed25519KeyIdentity.generate()
-  const identity = toDelegationIdentity(baseIdentity)
-
-  const message = new Map<any, any>([
-    ['challenge', 'login-123'],
-    ['origin', 'https://example.com']
-  ])
-
-  const envelope = await signMessage(identity, message)
-  const token = bytesToBase64Url(deterministicEncode(envelope))
-
-  // Send `token` as an `Authorization: ICP ${token}` value, or send the
-  // compact envelope bytes to an IC-Auth verifier.
-  console.log(token)
-}
-
-main()
+const identity = toDelegationIdentity(Ed25519KeyIdentity.generate())
+const message = { challenge: 'login-123', origin: 'https://example.com' }
+const envelope = await signMessage(identity, message)
+const token = bytesToBase64Url(deterministicEncode(envelope))
+console.log(`ICP ${token}`)
 ```
 
-`signMessage` hashes the deterministic CBOR encoding of the supplied value with SHA3-256 and signs that digest. Use `signArbitrary` when you already have the digest bytes.
+`toDelegationIdentity` preserves an existing `DelegationIdentity` or wraps a plain `SignIdentity` with an empty delegation chain. Pass an existing delegated identity to retain the user's principal and include its delegations in the envelope. Generating a fresh Ed25519 identity, as above, creates a new principal.
 
-## Convert Wire Types
+`signMessage` returns a `SignedEnvelopeCompact` containing `p`, `s`, and `h`, plus `d` when the identity has delegations. Send the token as `Authorization: ICP <token>` to your own endpoint using the Rust parser. The standalone service takes the token in a JSON/CBOR request body instead; see its [complete client example](../../rs/ic_auth_verify_server/README.md#call-from-typescript).
+
+## Sign bytes or a precomputed digest
+
+```typescript
+import {
+  Ed25519KeyIdentity,
+  sha3_256,
+  signArbitrary,
+  toDelegationIdentity
+} from '@ldclabs/ic-auth'
+
+const identity = toDelegationIdentity(Ed25519KeyIdentity.generate())
+const requestBytes = new TextEncoder().encode('login-challenge-123')
+const digest = sha3_256(requestBytes)
+const envelope = await signArbitrary(identity, digest)
+```
+
+| Helper | Operation |
+| --- | --- |
+| `digestMessage(value)` | SHA3-256 of deterministic CBOR for `value` |
+| `signMessage(identity, value)` | Signs `digestMessage(value)` |
+| `signArbitrary(identity, bytes)` | Signs the supplied bytes directly, storing them in `h` |
+
+Calling `signMessage` with a `Uint8Array` hashes its **CBOR byte-string encoding**, including the CBOR prefix. To match Rust's `SignedEnvelope::sign_message(identity, raw_bytes)`, hash the raw bytes with `sha3_256` and call `signArbitrary`, as above. Alternatively, deterministically CBOR-encode the same structured value in Rust before calling `sign_message`.
+
+The SDK does not define the application's challenge schema. The verifier should independently compute the expected digest and enforce challenge expiry, one-time use, target, and authorization rules.
+
+## Deterministic CBOR and binary fields
+
+`deterministicEncode` wraps `cborg`'s `encode` with `rfc8949EncodeOptions`. The package also exports `encode`, `decode`, `rfc8949EncodeOptions`, and `compareBytes`.
+
+Use `Uint8Array` for binary fields and `bigint` for delegation expiration in nanoseconds. Match the exact field names, value types, and optional-field presence on both sides when signing across languages. The default `encode` function is available for ordinary CBOR; use `deterministicEncode` for signed or hashed data.
+
+`JSON.stringify(envelope)` is not the IC-Auth JSON wire encoding: it does not turn `Uint8Array` into Base64URL and cannot serialize `bigint`. Transport an envelope as CBOR, or Base64URL-encode its CBOR bytes for an HTTP token or the service's JSON request body.
+
+## Compact types and conversions
+
+| Type | Compact keys |
+| --- | --- |
+| `SignedEnvelopeCompact` | `p`: public key; `s`: signature; `h`: optional digest; `d`: optional delegation chain |
+| `DelegationCompact` | `p`: delegated key; `e`: nanosecond expiration; `t`: optional targets; `perm`: optional permissions |
+| `SignedDelegationCompact` | `d`: delegation; `s`: signature |
+| `DeepLinkSignInRequestCompact` | `s`: session key; `m`: maximum lifetime in milliseconds |
+| `DeepLinkSignInResponseCompact` | `u`: user key; `d`: delegations; `a`: authentication method; `o`: origin |
+
+`DelegationPermissions` is `'queries' | 'all'`. Full-name types use `Uint8Array`, `bigint`, and `Principal` values. The `toDelegation`, `toSignedDelegation`, `toSignedEnvelope`, and deep-link converters each have a corresponding `...Compact` conversion.
 
 ```typescript
 import { toSignedEnvelope, toSignedEnvelopeCompact } from '@ldclabs/ic-auth'
 
-const full = toSignedEnvelope({
-  p: new Uint8Array([1, 2, 3]),
-  s: new Uint8Array([4, 5, 6])
-})
-
-const compact = toSignedEnvelopeCompact(full)
+// Illustrative bytes for shape conversion, not a valid signed envelope.
+const compact = { p: new Uint8Array([1, 2, 3]), s: new Uint8Array([4, 5, 6]) }
+const full = toSignedEnvelope(compact)
+const converted = toSignedEnvelopeCompact(full)
 ```
 
-The compact forms match the Rust serde names used by `ic_auth_types` and `ic_auth_verifier`.
+Converters map between typed shapes; they do not verify signatures or validate untrusted input. They may return the original object when it is already in the requested form. The TypeScript deep-link exports describe payloads and convert their fields; Rust provides the URL construction/parsing helpers.
 
-## Related Packages
+## Base64 helpers
 
-- [`ic_auth_types`](https://crates.io/crates/ic_auth_types): shared Rust data types and deterministic CBOR helpers.
-- [`ic_auth_verifier`](https://crates.io/crates/ic_auth_verifier): Rust signature, envelope, and delegation verifier.
-- [`ic_auth_verify_server`](https://github.com/ldclabs/ic-auth/tree/main/rs/ic_auth_verify_server): HTTP JSON/CBOR verification service.
+| Helper | Encoding |
+| --- | --- |
+| `bytesToBase64Url(bytes)` | Unpadded Base64URL, suitable for envelope tokens |
+| `base64ToBytes(text)` | Decodes Base64URL after normalizing its alphabet |
+| `toBase64(bytes)` | Padded standard Base64 |
+| `fromBase64(text)` | Standard Base64 decoding using native helpers, Node `Buffer`, or browser `atob` |
+
+Use `base64ToBytes` for URL-safe input across runtimes. These helpers return or accept unprefixed values; remove a Rust JSON wrapper's `b64:` prefix before decoding it here. Rust HTTP envelope tokens are already unprefixed.
+
+## Development
+
+From this directory, with Node.js and pnpm installed:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm build
+pnpm test
+pnpm coverage
+```
+
+`pnpm build` emits JavaScript and declarations into `dist`. Tests cover CBOR fixtures, wire conversions, delegation permissions, identity signing, and Base64 handling. `pnpm format` formats the source files with Prettier.
+
+## Related packages
+
+- [Shared Rust types](../../rs/ic_auth_types/README.md)
+- [Rust verifier](../../rs/ic_auth_verifier/README.md)
+- [HTTP verification service](../../rs/ic_auth_verify_server/README.md)
+- [npm package](https://www.npmjs.com/package/@ldclabs/ic-auth)
 
 ## License
 
 Copyright © 2024-2026 [LDC Labs](https://github.com/ldclabs).
 
-Licensed under the MIT License. See [LICENSE](LICENSE) for details.
+Licensed under the MIT License. See [LICENSE](LICENSE).
