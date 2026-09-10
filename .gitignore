@@ -27,3 +27,4 @@ dist/
 .cargo
 .vscode
 node_modules
+.pnpm-store/

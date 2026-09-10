@@ -14,3 +14,25 @@ jobs:
         run: |
           cargo clippy --verbose --all-targets --all-features
           cargo test --verbose --workspace --all-features -- --nocapture
+
+  worker:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ts/ic-auth-worker
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ts/ic-auth-worker/package.json
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check Worker
+        run: |
+          pnpm format:check
+          pnpm typecheck
+          pnpm test
+          pnpm build

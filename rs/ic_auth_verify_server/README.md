@@ -142,6 +142,12 @@ docker run --rm -p 8080:8080 ic_auth_verify_server
 
 The build uses `cargo build --release --locked`. The runtime image is a statically linked musl binary on `scratch`, runs as UID/GID `65532:65532`, and sets `SOCKET_ADDR=0.0.0.0:8080`. It has no shell or persistent application state.
 
+## Cloudflare Workers and Containers
+
+The [`ic-auth-worker`](../../ts/ic-auth-worker/README.md) application packages this service for Cloudflare Containers. Its Wrangler configuration builds this crate's Dockerfile with the repository root as the build context. The Worker routes requests to a fixed set of regional instances and preserves this HTTP API, including JSON/CBOR bodies and verification error codes.
+
+Use it through a Worker service binding or configure a public route. A container startup or forwarding exception produces an additional `503` response with `Retry-After: 1`. See the [Worker setup and deployment guide](../../ts/ic-auth-worker/README.md) for configuration and caller examples.
+
 ## Development
 
 From the repository root:

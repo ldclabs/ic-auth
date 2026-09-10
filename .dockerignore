@@ -1,0 +1,8 @@
+# Only workspace inputs needed by the verifier Dockerfile enter the context.
+**
+!Cargo.toml
+!Cargo.lock
+!rs/
+!rs/**
+rs/**/target/
+rs/**/.env*

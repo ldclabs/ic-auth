@@ -12,6 +12,7 @@ IC-Auth connects identity-based signing in TypeScript and Rust with signature ve
 | `ic_auth_verifier` | Signature and delegation verification, HTTP envelopes, deep links, optional signing identities | [Rust verifier](rs/ic_auth_verifier/README.md) |
 | `ic_auth_verify_server` | JSON/CBOR HTTP verification service | [HTTP API and deployment](rs/ic_auth_verify_server/README.md) |
 | `@ldclabs/ic-auth` | TypeScript identities, signing, compact wire types, and deterministic CBOR | [TypeScript SDK](ts/ic-auth/README.md) |
+| `ic-auth-worker` | Cloudflare Worker and Containers deployment of the Rust HTTP verifier | [Cloudflare deployment](ts/ic-auth-worker/README.md) |
 
 Rust dependency examples use the workspace's `0.10` release line. The TypeScript package has its own version in [package.json](ts/ic-auth/package.json). To use changes from this checkout before publication, use Cargo path dependencies or build the TypeScript package locally.
 
@@ -21,6 +22,7 @@ Rust dependency examples use the workspace's `0.10` release line. The TypeScript
 - **Rust backend:** enable `ic_auth_verifier/envelope` to verify envelopes; enable `identity` to sign them too.
 - **IC canister:** use `ic_auth_types` and `ic_auth_verifier` with `envelope`. Supply the IC time explicitly; leave the native `identity` and upstream `xid` features disabled.
 - **HTTP verification:** run `ic_auth_verify_server` and call `POST /verify` with a JSON or CBOR body.
+- **Cloudflare:** deploy `ts/ic-auth-worker` to run the same verifier in Containers, with regional routing and Worker service bindings.
 
 ```toml
 [dependencies]
@@ -132,6 +134,17 @@ pnpm build
 pnpm test
 pnpm coverage
 ```
+
+Both TypeScript packages belong to the root [pnpm workspace](pnpm-workspace.yaml) and share [pnpm-lock.yaml](pnpm-lock.yaml). From `ts/ic-auth-worker`:
+
+```bash
+pnpm install --frozen-lockfile
+pnpm typecheck
+pnpm test
+pnpm build
+```
+
+`pnpm build` checks the Worker bundle without deploying. Local container development additionally requires Docker; see the [Worker README](ts/ic-auth-worker/README.md).
 
 ## API references
 

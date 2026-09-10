@@ -1,0 +1,39 @@
+{
+	"name": "ic-auth-worker",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Cloudflare Worker and Containers wrapper for the IC-Auth Rust verification service.",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/ldclabs/ic-auth.git",
+		"directory": "ts/ic-auth-worker"
+	},
+	"homepage": "https://github.com/ldclabs/ic-auth/tree/main/ts/ic-auth-worker",
+	"engines": {
+		"node": ">=24"
+	},
+	"packageManager": "pnpm@12.3.4",
+	"scripts": {
+		"dev": "wrangler dev",
+		"start": "wrangler dev",
+		"deploy": "wrangler deploy",
+		"build": "wrangler deploy --dry-run --containers-rollout=none --outdir dist",
+		"types": "wrangler types",
+		"typecheck": "wrangler types && tsc --noEmit",
+		"test": "vitest run",
+		"format": "prettier --write src test vitest.config.ts *.json *.jsonc README.md",
+		"format:check": "prettier --check src test vitest.config.ts *.json *.jsonc README.md",
+		"build:container": "docker build --platform linux/amd64 -f ../../rs/ic_auth_verify_server/Dockerfile -t ic-auth-verify-server:local ../.."
+	},
+	"dependencies": {
+		"@cloudflare/containers": "^0.3.7"
+	},
+	"devDependencies": {
+		"prettier": "^3.9.6",
+		"typescript": "^7.0.2",
+		"vitest": "^5.0.0",
+		"wrangler": "^4.130.0"
+	}
+}

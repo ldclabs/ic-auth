@@ -1,0 +1,7 @@
+packages:
+  - 'ts/ic-auth'
+  - 'ts/ic-auth-worker'
+# Build scripts required by Wrangler and Vitest's runtime tooling.
+allowBuilds:
+  esbuild: true
+  workerd: true
