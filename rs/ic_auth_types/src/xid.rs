@@ -25,7 +25,7 @@ const DEC: [u8; 256] = gen_dec();
 /// XID is a globally unique identifier similar to UUID, but uses a more compact
 /// representation (12 bytes vs 16 bytes) and is lexicographically sortable.
 /// It's represented as a 20-character base32 string when serialized to text.
-#[derive(CandidType, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(CandidType, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Xid(pub [u8; RAW_LEN]);
 
 /// A constant representing an empty XID (all zeros)
@@ -476,10 +476,7 @@ mod tests {
     fn generator_is_deterministic_and_preserves_namespace() {
         let generator = XidGenerator::new([1, 2, 3, 4, 5]);
         let (first, next) = generator.allocate(0).unwrap();
-        assert_eq!(
-            generator.allocate(0).unwrap(),
-            (first.clone(), next.clone())
-        );
+        assert_eq!(generator.allocate(0).unwrap(), (first, next.clone()));
         assert_eq!(first.0, [0, 0, 0, 0, 1, 2, 3, 4, 5, 0, 0, 0]);
         assert_eq!(next.last_second, Some(0));
         assert_eq!(next.next_counter, 1);
@@ -666,7 +663,7 @@ mod tests {
         ] {
             let xid = Xid(raw);
             let bytes = raw.to_vec();
-            let encoded_xid = candid::encode_one(&xid).unwrap();
+            let encoded_xid = candid::encode_one(xid).unwrap();
             let encoded_bytes = candid::encode_one(&bytes).unwrap();
 
             assert_eq!(encoded_xid, encoded_bytes);
@@ -760,7 +757,7 @@ mod tests {
             let original = xid::Id(raw);
             let wrapped: Xid = original.into();
             assert_eq!(wrapped.as_slice(), raw.as_slice());
-            let back: xid::Id = wrapped.clone().into();
+            let back: xid::Id = wrapped.into();
             assert_eq!(back.0, raw);
             assert_eq!(wrapped.xid().0, raw);
         }

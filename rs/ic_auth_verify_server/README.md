@@ -18,6 +18,8 @@ SOCKET_ADDR=0.0.0.0:8080 cargo run --release -p ic_auth_verify_server
 
 Logs are written as structured JSON to stdout. Ctrl+C and, on Unix, SIGTERM trigger graceful shutdown. Verification is local and does not make outbound network calls. The listener serves HTTP; configure HTTPS and browser CORS at your application gateway when needed.
 
+Envelope decoding and signature verification run on blocking workers, with concurrent verification limited to the available CPU parallelism. Requests wait asynchronously for a slot, and verification uses the current time after that wait.
+
 ## Endpoints
 
 ### `GET /`
@@ -119,6 +121,7 @@ For CBOR requests, use `deterministicEncode` on the outer request object, keep e
 - `POST /verify` selects its body parser from `Content-Type` only. It accepts `application/json`, `application/cbor`, and structured suffixes such as `application/vnd.example+cbor`.
 - Successful POST responses use the request's JSON or CBOR format, regardless of `Accept`.
 - `GET /` prefers a supported `Content-Type` header, otherwise negotiates `Accept` with quality values. Missing `Accept` and ordinary wildcards default to JSON. A request offering only unsupported response formats receives `406`.
+- Specific `Accept` ranges override wildcards, including `q=0` exclusions. Only JSON and CBOR are response candidates; an unsupported preferred format does not prevent selecting an acceptable supported format.
 - Errors produced while decoding or verifying payloads are plain text. An unsupported request content type returns `415` with no structured error body.
 
 | Status | Meaning |

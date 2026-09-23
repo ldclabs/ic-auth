@@ -42,70 +42,70 @@ impl Content<()> {
             return ct;
         }
 
-        match headers.get(header::ACCEPT).map(HeaderValue::to_str) {
-            Some(Ok(accept)) => Self::from_accept(accept),
-            // An unreadable `Accept` is the client's own error, so report it
-            // rather than guessing a format for it.
-            Some(Err(_)) => Content::Other("unknown".to_string(), None),
-            None => Content::Json((), None),
+        if !headers.contains_key(header::ACCEPT) {
+            return Content::Json((), None);
+        }
+        // Accept is a list-valued header, including when split over field lines.
+        let values = headers
+            .get_all(header::ACCEPT)
+            .iter()
+            .map(HeaderValue::to_str)
+            .collect::<Result<Vec<_>, _>>();
+        match values {
+            Ok(values) => Self::from_accept(&values.join(",")),
+            Err(_) => Content::Other("unknown".to_string(), None),
         }
     }
 
-    /// Selects the best format offered by an `Accept` header value.
-    ///
-    /// Media ranges are matched as whole types with their q-values honoured,
-    /// rather than by substring: `application/cbor;q=0` is a refusal, not a
-    /// request for CBOR, and `application/cbor-seq` is its own type. Wildcards
-    /// (`*/*`, `application/*`) resolve to JSON, so ordinary clients such as
-    /// curl and browsers get a readable body instead of `406`.
+    /// Selects only formats this service can produce. Specific ranges override
+    /// wildcards even at q=0; unsupported types never displace a supported one.
     fn from_accept(accept: &str) -> Self {
-        // Lower rank wins ties, preserving the previous CBOR > JSON > text
-        // preference for a client that offers several formats equally.
-        let mut best: Option<(f32, u8)> = None;
+        // Each candidate stores its most specific match and quality.
+        let mut candidates: [Option<(u8, f32)>; 2] = [None, None];
         for range in accept.split(',') {
-            let range = range.trim();
-            if range.is_empty() {
-                continue;
-            }
-            let Ok(mime) = range.parse::<mime::Mime>() else {
+            let Ok(mime) = range.trim().parse::<mime::Mime>() else {
                 continue;
             };
             let quality = match mime.get_param("q") {
                 Some(q) => match q.as_str().parse::<f32>() {
-                    Ok(q) if q.is_finite() => q,
+                    Ok(q) if (0.0..=1.0).contains(&q) => q,
                     _ => continue,
                 },
                 None => 1.0,
             };
-            if quality <= 0.0 {
-                continue;
-            }
-
-            let rank = match (mime.type_(), mime.subtype()) {
-                (mime::APPLICATION, mime::STAR) | (mime::STAR, _) => 1,
-                (mime::APPLICATION, sub) => {
-                    if sub == "cbor" || mime.suffix().is_some_and(|name| name == "cbor") {
-                        0
-                    } else if sub == "json" || mime.suffix().is_some_and(|name| name == "json") {
-                        1
-                    } else {
-                        continue;
+            for (format, candidate) in ["json", "cbor"].into_iter().zip(&mut candidates) {
+                let specificity = match (mime.type_(), mime.subtype()) {
+                    (mime::STAR, mime::STAR) => 0,
+                    (mime::APPLICATION, mime::STAR) => 1,
+                    (mime::APPLICATION, sub)
+                        if sub == format
+                            || mime.suffix().is_some_and(|suffix| suffix == format) =>
+                    {
+                        2
                     }
+                    _ => continue,
+                };
+                if candidate
+                    .is_none_or(|(s, q)| specificity > s || (specificity == s && quality > q))
+                {
+                    *candidate = Some((specificity, quality));
                 }
-                (mime::TEXT, sub) if sub == mime::PLAIN || sub == mime::STAR => 2,
-                _ => continue,
-            };
-
-            if best.is_none_or(|(q, r)| quality > q || (quality == q && rank < r)) {
-                best = Some((quality, rank));
             }
         }
-
-        match best {
-            Some((_, 0)) => Content::Cbor((), None),
-            Some((_, 1)) => Content::Json((), None),
-            Some((_, _)) => Content::Text("".to_string(), None),
-            None => Content::Other(accept.to_string(), None),
+        let [json, cbor] = candidates.map(|candidate| candidate.filter(|(_, q)| *q > 0.0));
+        match (json, cbor) {
+            (None, None) => Content::Other(accept.to_string(), None),
+            (Some(_), None) => Content::Json((), None),
+            (None, Some(_)) => Content::Cbor((), None),
+            (Some((js, jq)), Some((cs, cq))) => {
+                // Prefer explicit CBOR on equal quality; plain wildcards keep
+                // the JSON default used by browsers and curl.
+                if cq > jq || (cq == jq && (cs > js || (cs == 2 && js == 2))) {
+                    Content::Cbor((), None)
+                } else {
+                    Content::Json((), None)
+                }
+            }
         }
     }
 
@@ -269,7 +269,7 @@ mod tests {
         assert!(matches!(Content::from(&headers), Content::Cbor((), None)));
 
         headers.insert(header::ACCEPT, CONTENT_TYPE_TEXT.parse().unwrap());
-        assert!(matches!(Content::from(&headers), Content::Text(_, None)));
+        assert!(matches!(Content::from(&headers), Content::Other(_, None)));
 
         headers.insert(header::ACCEPT, "application/xml".parse().unwrap());
         assert!(matches!(Content::from(&headers), Content::Other(_, None)));
@@ -315,12 +315,12 @@ mod tests {
             Content::Other(_, None)
         ));
 
-        // Equal quality keeps the historical CBOR > JSON > text preference.
+        // Equal quality keeps the historical CBOR > JSON preference.
         assert!(matches!(
             pick("application/json, application/cbor"),
             Content::Cbor((), None)
         ));
-        assert!(matches!(pick("text/plain"), Content::Text(_, None)));
+        assert!(matches!(pick("text/plain"), Content::Other(_, None)));
 
         // A distinct type that merely contains a supported name is not a match.
         assert!(matches!(

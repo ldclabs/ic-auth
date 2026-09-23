@@ -12,8 +12,18 @@ jobs:
       - uses: dfinity/setup-dfx@main
       - name: Run tests
         run: |
-          cargo clippy --verbose --all-targets --all-features
-          cargo test --verbose --workspace --all-features -- --nocapture
+          cargo fmt --all -- --check
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace --all-features
+          cargo test --locked -p ic_auth_types --no-default-features
+          cargo test --locked -p ic_auth_verifier --no-default-features
+          cargo test --locked -p ic_auth_verifier --features envelope
+      - name: Check canister configurations
+        run: |
+          rustup target add wasm32-unknown-unknown
+          cargo check --locked -p ic_auth_types --target wasm32-unknown-unknown
+          cargo check --locked -p ic_auth_verifier --target wasm32-unknown-unknown
+          cargo check --locked -p ic_auth_verifier --features envelope --target wasm32-unknown-unknown
 
   worker:
     runs-on: ubuntu-latest

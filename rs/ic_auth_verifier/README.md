@@ -82,7 +82,7 @@ Two HTTP representations are supported:
 
 | API | Representation |
 | --- | --- |
-| `to_authorization` / `from_authorization` | `Authorization: ICP <base64url-cbor-envelope>` |
+| `to_authorization` / `from_authorization` | `Authorization: ICP <base64url-cbor-envelope>` (scheme parsing is case-insensitive) |
 | `to_headers` / `from_headers` | Individual headers listed below |
 
 The component headers are `IC-Auth-Pubkey`, `IC-Auth-Content-Digest`, `IC-Auth-Signature`, and optional `IC-Auth-Delegation`. Values are unprefixed Base64URL; the delegation value contains CBOR. Component parsing requires the pubkey, digest, and signature. Both parsing APIs return `None` for missing or malformed data; a malformed delegation header also invalidates the envelope.
@@ -122,6 +122,8 @@ The `identity` feature re-exports `Identity`, `BasicIdentity`, `DelegatedIdentit
 - `delegated_basic_identity(&identity, expires_in_ms)` creates a delegated session with a lifetime in milliseconds.
 - `get_expiration(&identity)` returns the earliest delegation expiration in nanoseconds, when present.
 - `AtomicIdentity` implements `Identity` and supports replacing the active identity with `set` while readers retain an `Arc` snapshot from `get`.
+
+`AtomicIdentity::is_authenticated()` checks the principal and expiration from one snapshot. Expired sessions return `false` immediately; the verifier's separate delegation clock-drift allowance does not extend the client's authenticated session state.
 
 ## Deep-link sign-in
 

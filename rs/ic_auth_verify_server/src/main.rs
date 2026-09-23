@@ -17,12 +17,16 @@ use http::HeaderMap;
 use ic_auth_types::{ByteArrayB64, ByteBufB64, cbor_from_slice};
 use ic_auth_verifier::SignedEnvelope;
 use serde::{Deserialize, Serialize};
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    sync::{Arc, LazyLock},
+};
 use structured_logger::unix_ms;
 #[cfg(not(test))]
 use structured_logger::{Builder, async_json::new_writer, get_env_level};
 #[cfg(not(test))]
 use tokio::signal;
+use tokio::sync::Semaphore;
 
 mod content;
 use content::Content;
@@ -137,12 +141,20 @@ async fn get_information(headers: HeaderMap) -> impl IntoResponse {
     }
 }
 
+// Limit CPU work independently of Tokio's blocking-thread pool size.
+static VERIFY_SLOTS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| {
+    Arc::new(Semaphore::new(
+        std::thread::available_parallelism().map_or(1, |n| n.get()),
+    ))
+});
+
+type VerifyError = (StatusCode, String);
+
 /// POST /verify
 async fn post_verify(ct: Content<VerifyInput>) -> impl IntoResponse {
     let wants_cbor = matches!(ct, Content::Cbor(_, _));
-    let req = match &ct {
-        Content::Cbor(req, _) => req,
-        Content::Json(req, _) => req,
+    let req = match ct {
+        Content::Cbor(req, _) | Content::Json(req, _) => req,
         _ => {
             return Content::Text(
                 "supported content types: application/json, application/cbor".into(),
@@ -151,33 +163,58 @@ async fn post_verify(ct: Content<VerifyInput>) -> impl IntoResponse {
         }
     };
 
-    let now_ms = unix_ms();
-    let signed_envelope: SignedEnvelope = match cbor_from_slice(req.signed_envelope.as_slice()) {
-        Ok(se) => se,
-        Err(err) => {
-            return Content::Text(
+    match verify_with_limit(req, Arc::clone(&VERIFY_SLOTS)).await {
+        Ok(out) if wants_cbor => Content::Cbor(out, None),
+        Ok(out) => Content::Json(out, None),
+        Err((status, err)) => Content::Text(err, Some(status)),
+    }
+}
+
+async fn verify_with_limit(
+    req: VerifyInput,
+    slots: Arc<Semaphore>,
+) -> Result<VerifyOutput, VerifyError> {
+    let permit = slots.acquire_owned().await.map_err(|_| {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "verification unavailable".to_string(),
+        )
+    })?;
+    tokio::task::spawn_blocking(move || {
+        // Keep the permit until CPU work finishes, even if the HTTP caller
+        // disconnects and drops its waiting future.
+        let _permit = permit;
+        verify_request(req)
+    })
+    .await
+    .map_err(|err| {
+        log::error!("verification task failed: {err}");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "verification task failed".to_string(),
+        )
+    })?
+}
+
+fn verify_request(req: VerifyInput) -> Result<VerifyOutput, VerifyError> {
+    let signed_envelope: SignedEnvelope =
+        cbor_from_slice(req.signed_envelope.as_slice()).map_err(|err| {
+            (
+                StatusCode::BAD_REQUEST,
                 format!("failed to decode signed_envelope CBOR: {err}"),
-                Some(StatusCode::BAD_REQUEST),
-            );
-        }
-    };
-
-    if let Err(err) = signed_envelope.verify(
-        now_ms,
-        req.expect_target,
-        req.expect_digest.as_ref().map(|d| d.as_slice()),
-    ) {
-        return Content::Text(err, Some(StatusCode::UNAUTHORIZED));
-    }
-    let out = VerifyOutput {
-        user: Principal::self_authenticating(&signed_envelope.pubkey),
-    };
-
-    if wants_cbor {
-        Content::Cbor(out, None)
-    } else {
-        Content::Json(out, None)
-    }
+            )
+        })?;
+    // Read time when verification starts, after any wait for a CPU slot.
+    signed_envelope
+        .verify(
+            unix_ms(),
+            req.expect_target,
+            req.expect_digest.as_ref().map(|d| d.as_slice()),
+        )
+        .map_err(|err| (StatusCode::UNAUTHORIZED, err))?;
+    Ok(VerifyOutput {
+        user: signed_envelope.sender(),
+    })
 }
 
 #[cfg(test)]
@@ -392,5 +429,87 @@ mod tests {
             body,
             bytes::Bytes::from_static(b"Unsupported MIME type: application/xml")
         );
+    }
+
+    #[tokio::test]
+    async fn get_information_negotiates_only_supported_acceptable_formats() {
+        for (accept, status, content_type) in [
+            (
+                "application/json;q=0, application/cbor;q=0, */*;q=1",
+                StatusCode::NOT_ACCEPTABLE,
+                "text/plain",
+            ),
+            (
+                "text/plain;q=1, application/json;q=0.5",
+                StatusCode::OK,
+                "application/json",
+            ),
+            (
+                "application/json;q=0, */*;q=0.5",
+                StatusCode::OK,
+                "application/cbor",
+            ),
+            (
+                "application/cbor;q=0, */*;q=0.5",
+                StatusCode::OK,
+                "application/json",
+            ),
+            (
+                "application/json;q=2, application/cbor;q=0.5",
+                StatusCode::OK,
+                "application/cbor",
+            ),
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert(http::header::ACCEPT, accept.parse().unwrap());
+            let response = get_information(headers).await.into_response();
+            assert_eq!(response.status(), status, "{accept}");
+            assert_eq!(
+                response.headers()[http::header::CONTENT_TYPE],
+                content_type,
+                "{accept}"
+            );
+        }
+        let mut headers = HeaderMap::new();
+        headers.append(http::header::ACCEPT, "application/xml".parse().unwrap());
+        headers.append(http::header::ACCEPT, "application/json".parse().unwrap());
+        assert_eq!(
+            get_information(headers).await.into_response().status(),
+            StatusCode::OK
+        );
+    }
+
+    #[tokio::test]
+    async fn verification_waits_for_a_slot_without_blocking_the_runtime() {
+        use std::time::Duration;
+        let slots = Arc::new(Semaphore::new(1));
+        let held = slots.clone().acquire_owned().await.unwrap();
+        let (input, user) = signed_verify_input();
+        let mut pending = Box::pin(verify_with_limit(input, slots.clone()));
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), pending.as_mut())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            get_information(HeaderMap::new())
+                .await
+                .into_response()
+                .status(),
+            StatusCode::OK
+        );
+        drop(held);
+        assert_eq!(pending.await.unwrap().user, user);
+        assert_eq!(slots.available_permits(), 1);
+        let bad = VerifyInput {
+            signed_envelope: vec![0xff].into(),
+            expect_target: None,
+            expect_digest: None,
+        };
+        assert!(matches!(
+            verify_with_limit(bad, slots.clone()).await,
+            Err((StatusCode::BAD_REQUEST, _))
+        ));
+        assert_eq!(slots.available_permits(), 1);
     }
 }

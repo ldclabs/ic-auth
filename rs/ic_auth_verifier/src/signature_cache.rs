@@ -28,6 +28,7 @@ pub struct SignatureCacheEntry([u8; 32]);
 /// carries no unsound state and is recovered rather than propagated.
 pub struct SignatureCache {
     inner: Mutex<Inner>,
+    capacity: usize,
 }
 
 struct Inner {
@@ -53,9 +54,11 @@ impl SignatureCache {
     /// touches.
     pub const DEFAULT_CAPACITY: usize = 512;
 
+    /// Creates a FIFO cache limited to `capacity` entries (at least one).
     pub fn with_capacity(capacity: usize) -> Self {
         let capacity = capacity.max(1);
         Self {
+            capacity,
             inner: Mutex::new(Inner {
                 entries: HashSet::with_capacity(capacity),
                 order: VecDeque::with_capacity(capacity),
@@ -95,7 +98,7 @@ impl SignatureCache {
             return;
         }
         inner.order.push_back(entry);
-        while inner.order.len() > Self::DEFAULT_CAPACITY {
+        while inner.order.len() > self.capacity {
             if let Some(evicted) = inner.order.pop_front() {
                 inner.entries.remove(&evicted);
             }
@@ -167,5 +170,23 @@ mod tests {
         let inner = cache.lock();
         assert_eq!(inner.order.len(), 1);
         assert_eq!(inner.entries.len(), 1);
+    }
+
+    #[test]
+    fn custom_capacity_controls_fifo_eviction() {
+        for capacity in [0, 1, 1024] {
+            let cache = SignatureCache::with_capacity(capacity);
+            let limit = capacity.max(1);
+            let first = SignatureCache::entry(b"pk", b"sig", &0usize.to_be_bytes());
+            for i in 0..limit {
+                cache.insert(SignatureCache::entry(b"pk", b"sig", &i.to_be_bytes()));
+            }
+            assert!(cache.contains(&first));
+            let last = SignatureCache::entry(b"pk", b"sig", &limit.to_be_bytes());
+            cache.insert(last);
+            assert!(!cache.contains(&first));
+            assert!(cache.contains(&last));
+            assert_eq!(cache.lock().entries.len(), limit);
+        }
     }
 }

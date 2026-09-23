@@ -7,9 +7,9 @@
 //! such as CBOR.
 //!
 //! The CBOR helpers wrap [`cbor2`] and provide deterministic RFC 8949 encoding
-//! for values that are signed or hashed. [`cbor_from_slice`] also contains the
-//! compatibility path needed by IC/Candid-specific types such as
-//! [`candid::Principal`].
+//! for values that are signed or hashed. [`cbor_from_slice`] supports
+//! IC/Candid-specific types such as [`candid::Principal`] and rejects trailing
+//! bytes after the decoded value.
 //!
 //! # Examples
 //!

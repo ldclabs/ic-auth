@@ -71,21 +71,17 @@ impl AtomicIdentity {
     /// # Returns
     /// `true` if the identity is authenticated and not expired, `false` otherwise.
     pub fn is_authenticated(&self) -> bool {
-        match self.sender() {
+        let identity = self.inner.load();
+        match identity.sender() {
             Err(_) => false,
             Ok(principal) => {
                 if principal == Principal::anonymous() {
                     return false;
                 }
 
-                match get_expiration(self) {
+                match get_expiration(identity.as_ref()) {
                     None => true,
-                    Some(expiration) => {
-                        let now = unix_timestamp()
-                            .saturating_sub(Duration::from_secs(60))
-                            .as_nanos() as u64;
-                        expiration > now
-                    }
+                    Some(expiration) => u128::from(expiration) > unix_timestamp().as_nanos(),
                 }
             }
         }
@@ -367,12 +363,15 @@ mod tests {
 
         // 测试有委托链的情况
         let basic = new_basic_identity();
-        let expiration = unix_timestamp()
+        let earliest = unix_timestamp()
             .saturating_add(Duration::from_secs(3600))
-            .as_millis() as u64;
+            .as_nanos() as u64;
 
         let delegated = delegated_basic_identity(&basic, 3600 * 1000);
-        assert_eq!(get_expiration(&delegated).unwrap() / 1000000, expiration);
+        let latest = unix_timestamp()
+            .saturating_add(Duration::from_secs(3600))
+            .as_nanos() as u64;
+        assert!((earliest..=latest).contains(&get_expiration(&delegated).unwrap()));
 
         // 测试多个委托的情况，应返回最早的过期时间
         let basic = new_basic_identity();
@@ -492,5 +491,77 @@ mod tests {
             Some(vec![Principal::management_canister()])
         );
         assert_eq!(converted.signature, vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn authentication_uses_one_snapshot_during_replacement() {
+        use std::sync::Barrier;
+        struct ExpiredIdentity {
+            entered: Arc<Barrier>,
+            resume: Arc<Barrier>,
+        }
+        impl Identity for ExpiredIdentity {
+            fn sender(&self) -> Result<Principal, String> {
+                self.entered.wait();
+                self.resume.wait();
+                Ok(Principal::self_authenticating([1u8; 32]))
+            }
+            fn public_key(&self) -> Option<Vec<u8>> {
+                None
+            }
+            fn sign(&self, _: &EnvelopeContent) -> Result<Signature, String> {
+                Err("unused".into())
+            }
+            fn delegation_chain(&self) -> Vec<SignedDelegation> {
+                vec![SignedDelegation {
+                    delegation: Delegation {
+                        pubkey: vec![],
+                        expiration: 0,
+                        targets: None,
+                        permissions: None,
+                    },
+                    signature: vec![],
+                }]
+            }
+        }
+        let entered = Arc::new(Barrier::new(2));
+        let resume = Arc::new(Barrier::new(2));
+        let atomic = Arc::new(AtomicIdentity::new(Box::new(ExpiredIdentity {
+            entered: entered.clone(),
+            resume: resume.clone(),
+        })));
+        let worker = atomic.clone();
+        let result = std::thread::spawn(move || worker.is_authenticated());
+        entered.wait();
+        atomic.set(Box::new(AnonymousIdentity));
+        resume.wait();
+        assert!(!result.join().unwrap());
+        assert!(!atomic.is_authenticated());
+    }
+
+    #[test]
+    fn recently_expired_identity_is_not_authenticated() {
+        let user = BasicIdentity::from_raw_key(&[8; 32]);
+        let session = BasicIdentity::from_raw_key(&[9; 32]);
+        let delegation = Delegation {
+            pubkey: session.public_key().unwrap(),
+            expiration: (unix_timestamp() - Duration::from_secs(30)).as_nanos() as u64,
+            targets: None,
+            permissions: None,
+        };
+        let signature = user
+            .sign_delegation(&delegation)
+            .unwrap()
+            .signature
+            .unwrap();
+        let identity = AtomicIdentity::new(Box::new(DelegatedIdentity::new_unchecked(
+            user.public_key().unwrap(),
+            Box::new(session),
+            vec![SignedDelegation {
+                delegation,
+                signature,
+            }],
+        )));
+        assert!(!identity.is_authenticated());
     }
 }

@@ -314,34 +314,13 @@ impl SignedEnvelope {
             }
         };
 
-        let mut last_verified = &self.pubkey;
-        if let Some(delegation) = &self.delegation {
-            if delegation.len() > MAX_DELEGATION_CHAIN_LENGTH {
-                return Err(format!(
-                    "Delegation chain length exceeds the limit {}: {}",
-                    MAX_DELEGATION_CHAIN_LENGTH,
-                    delegation.len()
-                ));
-            }
-
-            for d in delegation {
-                check_delegation_expiration(d.delegation.expiration, now_ms)?;
-
-                if let (Some(targets), Some(target)) = (&d.delegation.targets, &expect_target) {
-                    // Should check if the expected target is in the delegation targets
-                    if !targets.contains(target) {
-                        return Err(format!(
-                            "Expected target canister ID '{expect_target:?}' is not in the delegation targets: {targets:?}"
-                        ));
-                    }
-                }
-
-                let message = delegation_signed_message(&d.delegation);
-                verify_sig(last_verified, &message, &d.signature, &current_time_ns)?;
-
-                last_verified = &d.delegation.pubkey;
-            }
-        }
+        let last_verified = verify_delegations(
+            &self.pubkey,
+            self.delegation.as_deref().unwrap_or_default(),
+            now_ms,
+            expect_target,
+            IC_ROOT_PK_DER,
+        )?;
 
         verify_sig(last_verified, digest, &self.signature, &current_time_ns)
     }
@@ -359,7 +338,8 @@ impl SignedEnvelope {
     pub fn from_authorization(headers: &HeaderMap) -> Option<Self> {
         if let Some(token) = headers.get(AUTHORIZATION)
             && let Ok(token) = token.to_str()
-            && let Some(token) = token.strip_prefix("ICP ")
+            && let Some((scheme, token)) = token.split_once(' ')
+            && scheme.eq_ignore_ascii_case("ICP")
             && let Ok(envelope) = Self::from_base64(token)
         {
             return Some(envelope);
@@ -503,31 +483,13 @@ pub fn verify_delegation_chain(
         return Err("Delegation chain is empty".to_string());
     }
 
-    if delegations.len() > MAX_DELEGATION_CHAIN_LENGTH {
-        return Err(format!(
-            "Delegation chain length exceeds the limit {}: {}",
-            MAX_DELEGATION_CHAIN_LENGTH,
-            delegations.len()
-        ));
-    }
-
-    let current_time_ns = now_ms as u128 * 1_000_000;
-    let ic_root_public_key_raw = ic_root_public_key_raw.unwrap_or(IC_ROOT_PK_DER);
-    let mut last_verified = user_pubkey;
-    for d in delegations {
-        check_delegation_expiration(d.delegation.expiration, now_ms)?;
-
-        let message = delegation_signed_message(&d.delegation);
-        verify_sig_with_rootkey(
-            ic_root_public_key_raw,
-            last_verified,
-            &message,
-            &d.signature,
-            &current_time_ns,
-        )?;
-
-        last_verified = &d.delegation.pubkey;
-    }
+    let last_verified = verify_delegations(
+        user_pubkey,
+        delegations,
+        now_ms,
+        None,
+        ic_root_public_key_raw.unwrap_or(IC_ROOT_PK_DER),
+    )?;
     if last_verified != session_pubkey {
         return Err(format!(
             "Last verified public key does not match session public key:\n\
@@ -539,6 +501,49 @@ pub fn verify_delegation_chain(
     }
 
     Ok(())
+}
+
+/// Verifies each link and returns the key authorized by the chain. An empty
+/// chain leaves the original key authorized, as required by plain envelopes.
+fn verify_delegations<'a>(
+    user_pubkey: &'a [u8],
+    delegations: &'a [SignedDelegationCompact],
+    now_ms: u64,
+    expect_target: Option<Principal>,
+    ic_root_public_key_der: &[u8],
+) -> Result<&'a [u8], String> {
+    if delegations.len() > MAX_DELEGATION_CHAIN_LENGTH {
+        return Err(format!(
+            "Delegation chain length exceeds the limit {}: {}",
+            MAX_DELEGATION_CHAIN_LENGTH,
+            delegations.len()
+        ));
+    }
+
+    let current_time_ns = now_ms as u128 * 1_000_000;
+    let mut last_verified = user_pubkey;
+    for d in delegations {
+        check_delegation_expiration(d.delegation.expiration, now_ms)?;
+        if let (Some(targets), Some(target)) = (&d.delegation.targets, &expect_target)
+            && !targets.contains(target)
+        {
+            return Err(format!(
+                "Expected target canister ID '{expect_target:?}' is not in the delegation targets: {targets:?}"
+            ));
+        }
+
+        let message = delegation_signed_message(&d.delegation);
+        verify_sig_with_rootkey(
+            ic_root_public_key_der,
+            last_verified,
+            &message,
+            &d.signature,
+            &current_time_ns,
+        )?;
+
+        last_verified = &d.delegation.pubkey;
+    }
+    Ok(last_verified)
 }
 
 fn is_delegation_expired(expiration_ns: u64, now_ms: u64) -> bool {
@@ -1405,60 +1410,147 @@ mod tests {
         assert!(err.contains("Delegation chain length exceeds the limit"));
     }
 
-    // The recorded canister-signature fixture below no longer verifies
-    // ("signature entry not found") and needs regenerating against a live
-    // subnet. It is kept compiling so the rot stays visible; it was previously
-    // hidden behind `#[cfg(any())]`, where it silently stopped building.
-    #[ignore = "stale canister-signature fixture, needs regenerating"]
     #[test]
     fn test_verify_delegation_chain() {
-        let user_pubkey = hex::decode(
-            "303C300C060A2B0601040183B8430102032C000A0000000000000007010116FB513D360579FA1102D36E3BC8D53FB966F3AC9F717842B2B54C227582D786",
-        ).unwrap();
-        let session_pubkey = hex::decode(
-            "302A300506032B6570032100C6C020379C06F82F81111E1DA776F143C4F532EBE2D9FB16461F1243B5A92BAA",
-        ).unwrap();
-        let delegations = vec![
+        use crate::{IC_STATE_ROOT_DOMAIN_SEPARATOR, sha256};
+        use ic_agent::{Identity, identity::BasicIdentity};
+        use ic_certification::{Certificate, fork, labeled, leaf};
+        use ic_verify_bls_signature::PrivateKey;
+
+        fn tagged<T: Serialize>(value: &T) -> Vec<u8> {
+            let mut bytes = vec![0xd9, 0xd9, 0xf7];
+            bytes.extend(serde_cbor::to_vec(value).unwrap());
+            bytes
+        }
+
+        let now_ms = 1_700_000_000_000;
+        let expiration = (now_ms + 600_000) * 1_000_000;
+        let middle = BasicIdentity::from_raw_key(&[8; 32]);
+        let session = BasicIdentity::from_raw_key(&[9; 32]);
+        let canister_key = CanisterSigPublicKey::new(Principal::from_slice(&[1]), vec![7; 32]);
+        let first = DelegationCompact {
+            pubkey: middle.public_key().unwrap().into(),
+            expiration,
+            targets: None,
+            permissions: None,
+        };
+        let sig_tree = labeled(
+            b"sig".to_vec(),
+            labeled(
+                sha256(&canister_key.seed).to_vec(),
+                labeled(
+                    sha256(&delegation_signed_message(&first)).to_vec(),
+                    leaf(Vec::<u8>::new()),
+                ),
+            ),
+        );
+        let mut time = now_ms * 1_000_000;
+        let mut encoded_time = Vec::new();
+        loop {
+            let byte = (time & 0x7f) as u8;
+            time >>= 7;
+            encoded_time.push(if time == 0 { byte } else { byte | 0x80 });
+            if time == 0 {
+                break;
+            }
+        }
+        let cert_tree = fork(
+            labeled(
+                b"canister".to_vec(),
+                labeled(
+                    canister_key.canister_id.as_slice().to_vec(),
+                    labeled(b"certified_data".to_vec(), leaf(sig_tree.digest().to_vec())),
+                ),
+            ),
+            labeled(b"time".to_vec(), leaf(encoded_time)),
+        );
+        let mut key_bytes = [0; 32];
+        key_bytes[31] = 1;
+        let root = PrivateKey::deserialize(&key_bytes).unwrap();
+        let mut root_der = IC_ROOT_PK_DER[..37].to_vec();
+        root_der.extend_from_slice(&root.public_key().serialize());
+        let mut message = IC_STATE_ROOT_DOMAIN_SEPARATOR.to_vec();
+        message.extend_from_slice(&cert_tree.digest());
+        let certificate = Certificate {
+            tree: cert_tree,
+            signature: root.sign(&message).serialize().to_vec(),
+            delegation: None,
+        };
+        #[derive(Serialize)]
+        struct CanisterSignature {
+            certificate: serde_bytes::ByteBuf,
+            tree: ic_certification::HashTree,
+        }
+        let first_signature = tagged(&CanisterSignature {
+            certificate: tagged(&certificate).into(),
+            tree: sig_tree,
+        });
+        let second = DelegationCompact {
+            pubkey: session.public_key().unwrap().into(),
+            expiration,
+            targets: None,
+            permissions: None,
+        };
+        let second_signature = middle
+            .sign_arbitrary(&delegation_signed_message(&second))
+            .unwrap()
+            .signature
+            .unwrap();
+        let mut delegations = vec![
             SignedDelegationCompact {
-                delegation: DelegationCompact {
-                    pubkey: hex::decode(
-                        "302A300506032B65700321005EC6DE6BD72919EA56CCA4E8E7124CEF75807DC212F1AE1FC3BA58903FC8795A",
-                    ).unwrap().into(),
-                    expiration: 1746365411593000000,
-                    targets: None,
-                    permissions: None,
-                },
-                signature: hex::decode(
-                    "D9D9F7A26B63657274696669636174655904AFD9D9F7A36474726565830183018301820458207F795EAF211FB3DA321D2291429BAD43A869A1CCFD761FF5A35F1A362322A1F483024863616E697374657283018301830183024A000000000000000701018301830183024E6365727469666965645F64617461820358201BD26E2A134BB173ACE579802B2BD138D28B3307CE5415BAD1304EDC8EB6A5E182045820D8F64F7AFCA6A55D4EE6DED9B0200BAC6651CAF4C7A1920212B5A03C9BF1DF3682045820F5ECD4D3EDCD85DE4C3B07B8A8D77F69DEFCB5BD652071FFD46B2A6604029112820458205085E5811DEACD817B4FF38A37C93B8421B7DDC92E5489FDF0D3F5CF36E320728204582032698C8D6A87E6831B3E8AA11641F27E77B692C6F866FD3D9D3E917EA570515682045820F7C9916E3BDEB2AC59E18441EBEFDDA60B801A91F8508B4F1B2ADA5B7F62AAA682045820989249384F8855B851E3F07C55E66DEFA4719612B1D9565E4C2B47918F902240830182045820FBF74833516364406FEC8290DFB4593E369120B408F757754CF11E96DF87AA8D83024474696D658203498CF3BBB0EDC2959E18697369676E61747572655830AF6204D323E367981055D0FB24E03070BDD6EC0D1BFABE2E3408B9C4792F1D4C44FE49A3AE9FD6ABD53D53DCF38E0E0E6A64656C65676174696F6EA2697375626E65745F6964581D43DCAF1180DB82FDA708CE3AC7A03A6060ABDE13E9546C60E8CCE65D026B6365727469666963617465590294D9D9F7A264747265658301820458200E077A1AA8E3A69E473446FB605EF74212198EC90D4D0010B3DC091AE3F01B798301830182045820954285DD391C0258F30BD79123B51AB939B93982F24426FE94E376FC13F5D3D38302467375626E6574830183018301820458200985315BBE905B7F9336D7064793905B005689F3C9C2A21AD9A31FBE6CDD5599830182045820466A70286CF9ACE9801CA53E22AF6EE059A094FD60498606D484B6854058307D83018301820458208B2F6C15078AE4D3B93470915CA53E373327F37EA74BA1B8177D986BB79B31AE8302581D43DCAF1180DB82FDA708CE3AC7A03A6060ABDE13E9546C60E8CCE65D02830183024F63616E69737465725F72616E67657382035832D9D9F782824A000000000000000701014A00000000000000070101824A000000000210000001014A00000000021FFFFF010183024A7075626C69635F6B657982035885308182301D060D2B0601040182DC7C0503010201060C2B0601040182DC7C050302010361008819AAA868DA353E3451BB97675FFFAA711E3C1C1230E39E1FEEB0AF9FE03E67C9393F08D796C1E42B528ABB5FCB4159199284B00096F6DAFA93B4711F1AC65F594B67CE2C0B35710E0391C5424CB754779A1C6084F6E77B584E7C8CF7FE9D89820458202C51DB7B5650B7A3DBBB8530A7449CC6F90144778B62F20F3C26D72E95E50698820458206961EF137C2AEE0B0467082EF6D3C12C03E93013B602A4CB6214270E484863F182045820EA6D87F551BD7F433852FA3F8697E653676C2DA59615618B39C50D74069123C983024474696D65820349A0BFA380BAC2959E18697369676E61747572655830B82F7761EC5C9A30672188D7A5F7EE82B540E51A86239C5A2A8E51DA6CB19CA3980DD8125440EC49C54865CED7EAA10F6474726565830182045820ECF5038E1037F1181243DAABBD82BE6045A5B0B9F1025C905FA339E2C1305608830243736967830183018204582029D9F6DAFC4411D79A0B7A64FCFF42FCE426974773A4178BA421DF59165D9E32830182045820ABD07F88910310B251F025105AEA620A46984E3D677A54EEC324134F6ED4DDD783018204582055D9BE42D0A247D96B4C67822E937EAD71567B5BE0A4965150F01D2AB51AC971830182045820CCB0E0C4819032E6C3C7B0E359F8A7297EED11A484FD7D8081CCA2461371E0328301830258206BB18EF359E4DBB2372D7C255BA9351BC862ACF06D9D2B14CDB1271EEFAA597E8302582015451785051A113622599AD74E94CC066EEF4BAC88AC36A42403C65CEDFFE8E0820340820458203A229EE09D8AC3B9C0540F596654FED78B3D5ABDD03657F66AD3240856214167820458206C0048C242D41CF83B77D782F6733B95B7AA137736741D05DACA0385D79BF466").unwrap().into()
-                }, SignedDelegationCompact{
-                    delegation: DelegationCompact {
-                    pubkey: hex::decode(
-                        "302A300506032B6570032100C6C020379C06F82F81111E1DA776F143C4F532EBE2D9FB16461F1243B5A92BAA",
-                    ).unwrap().into(),
-                    expiration: 1746365411593000000,
-                    targets: None,
-                    permissions: None,
-                },
-                signature: hex::decode("18397232DD4AE43103E1884E956F91B44188E40A288DBCB73BF99DC27DBFAB1E1F0FAB76C44E0A0206F34887D5197B46C2D57876B0DB4C28E97967FDA8807908").unwrap().into(),
-                }];
-        let rt = verify_delegation_chain(
+                delegation: first,
+                signature: first_signature.into(),
+            },
+            SignedDelegationCompact {
+                delegation: second,
+                signature: second_signature.into(),
+            },
+        ];
+        let user_pubkey = canister_key.to_der();
+        let session_pubkey = session.public_key().unwrap();
+        verify_delegation_chain(
             &user_pubkey,
             &session_pubkey,
             &delegations,
-            1746365411593,
-            None,
-        );
-        println!("Verification result: {:?}", rt);
-        assert!(rt.is_ok(), "Delegation chain verification failed: {:?}", rt);
-
+            now_ms,
+            Some(&root_der),
+        )
+        .unwrap();
         let err = verify_delegation_chain(
             &user_pubkey,
             b"wrong-session",
             &delegations,
-            1746365411593,
-            None,
+            now_ms,
+            Some(&root_der),
         )
         .unwrap_err();
         assert!(err.contains("Last verified public key does not match session public key"));
+        delegations[0].delegation.expiration += 1;
+        assert!(
+            verify_delegation_chain(
+                &user_pubkey,
+                &session_pubkey,
+                &delegations,
+                now_ms,
+                Some(&root_der)
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn authorization_scheme_is_case_insensitive() {
+        let envelope = sample_envelope();
+        for scheme in ["ICP", "icp", "IcP"] {
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                AUTHORIZATION,
+                format!("{scheme} {}", envelope.to_base64())
+                    .parse()
+                    .unwrap(),
+            );
+            let parsed = SignedEnvelope::from_authorization(&headers).unwrap();
+            assert_eq!(parsed.to_bytes(), envelope.to_bytes());
+        }
     }
 }

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-use serde::{Deserialize, de::DeserializeOwned, ser};
+use serde::{de::DeserializeOwned, ser};
 use std::io::Write;
 
 /// Serializes a value as CBOR into a new `Vec<u8>`.
@@ -20,11 +20,8 @@ pub fn cbor_into<T: ?Sized + ser::Serialize, W: Write>(value: &T, w: W) -> Resul
 
 /// Deserializes exactly one CBOR item from a byte slice.
 ///
-/// The first pass uses typed `cbor2` deserialization. If that fails, the
-/// function decodes through [`cbor2::Value`] and then asks the value to
-/// deserialize into `T`. That fallback preserves IC/Candid-specific custom
-/// deserialization paths, including [`candid::Principal`], while keeping the
-/// call sites independent of the CBOR backend.
+/// Uses typed `cbor2` deserialization, including support for IC/Candid types
+/// such as [`candid::Principal`].
 ///
 /// `bytes` must contain the item and nothing else. `cbor2::from_slice` stops
 /// at the end of the first item and ignores whatever follows, which would let
@@ -32,20 +29,9 @@ pub fn cbor_into<T: ?Sized + ser::Serialize, W: Write>(value: &T, w: W) -> Resul
 /// it decodes to. Trailing data is therefore rejected here.
 pub fn cbor_from_slice<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, String> {
     let mut de = cbor2::de::Deserializer::from_slice(bytes);
-    match T::deserialize(&mut de) {
-        Ok(value) => {
-            reject_trailing(de.offset(), bytes.len())?;
-            Ok(value)
-        }
-        Err(primary) => {
-            let mut de = cbor2::de::Deserializer::from_slice(bytes);
-            let value = cbor2::Value::deserialize(&mut de).map_err(|_| primary.to_string())?;
-            reject_trailing(de.offset(), bytes.len())?;
-            value
-                .deserialized()
-                .map_err(|fallback| format!("{primary}; via CBOR value: {fallback}"))
-        }
-    }
+    let value = T::deserialize(&mut de).map_err(|err| err.to_string())?;
+    reject_trailing(de.offset(), bytes.len())?;
+    Ok(value)
 }
 
 /// Fails when a CBOR item did not consume the whole input slice.
@@ -221,7 +207,7 @@ mod tests {
                 .contains("trailing")
         );
 
-        // The `cbor2::Value` fallback path enforces the same rule.
+        // Principal fields enforce the same complete-consumption rule.
         #[derive(Debug, Deserialize)]
         struct PrincipalPayload {
             #[allow(dead_code)]
@@ -255,5 +241,23 @@ mod tests {
         let decoded: PrincipalPayload = cbor_from_slice(&data).unwrap();
 
         assert_eq!(decoded, payload);
+    }
+
+    #[test]
+    fn principal_bytes_preserve_candid_marker_and_indefinite_chunks() {
+        for principal in [
+            Principal::management_canister(),
+            Principal::anonymous(),
+            Principal::from_slice(&[2, 3]),
+            Principal::from_slice(&[1; 29]),
+        ] {
+            let encoded = cbor_into_vec(&principal).unwrap();
+            assert_eq!(cbor_from_slice::<Principal>(&encoded).unwrap(), principal);
+        }
+        let indefinite = [0x5f, 0x41, 0x02, 0x41, 0x03, 0xff];
+        assert_eq!(
+            cbor_from_slice::<Principal>(&indefinite).unwrap(),
+            Principal::from_slice(&[2, 3])
+        );
     }
 }

@@ -19,15 +19,15 @@ license = "MIT"
 arc-swap = "1.9"
 base64 = "0.23"
 candid = "0.10"
-cbor2 = "1"
+cbor2 = "1.1.5"
 hex = "0.4"
 http = "1.5"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde_json = "1"
 serde_cbor = "0.11"
-k256 = { version = "0.14" }
-p256 = { version = "0.14" }
+k256 = { version = "0.14", default-features = false, features = ["ecdsa", "alloc"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "alloc"] }
 ed25519-dalek = "3"
 rand = "0.10"
 sha2 = "0.11"

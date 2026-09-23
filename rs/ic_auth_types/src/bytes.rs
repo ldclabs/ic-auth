@@ -1,5 +1,6 @@
 use base64::{
     Engine,
+    display::Base64Display,
     prelude::{BASE64_STANDARD, BASE64_STANDARD_NO_PAD, BASE64_URL_SAFE, BASE64_URL_SAFE_NO_PAD},
 };
 use candid::CandidType;
@@ -137,7 +138,7 @@ impl ByteBufB64 {
 /// let parsed: Example = serde_json::from_str(r#"{"data":"AQIDBA=="}"#).unwrap();
 /// assert_eq!(parsed.data.as_ref(), &[1, 2, 3, 4]);
 /// ```
-#[derive(CandidType, Clone, Eq, Ord)]
+#[derive(CandidType, Copy, Clone, Eq, Ord)]
 pub struct ByteArrayB64<const N: usize>(pub [u8; N]);
 
 impl<const N: usize> ByteArrayB64<N> {
@@ -204,7 +205,11 @@ impl<const N: usize> Default for ByteArrayB64<N> {
 
 impl Display for ByteBufB64 {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{B64_PREFIX}{}", BASE64_URL_SAFE.encode(&self.0))
+        write!(
+            f,
+            "{B64_PREFIX}{}",
+            Base64Display::new(&self.0, &BASE64_URL_SAFE)
+        )
     }
 }
 
@@ -216,7 +221,11 @@ impl Debug for ByteBufB64 {
 
 impl<const N: usize> Display for ByteArrayB64<N> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{B64_PREFIX}{}", BASE64_URL_SAFE.encode(self.0))
+        write!(
+            f,
+            "{B64_PREFIX}{}",
+            Base64Display::new(&self.0, &BASE64_URL_SAFE)
+        )
     }
 }
 
@@ -534,7 +543,11 @@ impl<'a> BytesB64<'a> {
 
 impl Display for BytesB64<'_> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{B64_PREFIX}{}", BASE64_URL_SAFE.encode(self.0.as_ref()))
+        write!(
+            f,
+            "{B64_PREFIX}{}",
+            Base64Display::new(self.0.as_ref(), &BASE64_URL_SAFE)
+        )
     }
 }
 
@@ -651,7 +664,7 @@ fn try_from_base64(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
 impl serde::Serialize for BytesB64<'_> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
-            format!("{B64_PREFIX}{}", BASE64_URL_SAFE.encode(self.0.as_ref())).serialize(serializer)
+            serializer.collect_str(self)
         } else {
             serializer.serialize_bytes(self.0.as_ref())
         }
@@ -676,7 +689,7 @@ impl<'de> serde::Deserialize<'de> for BytesB64<'_> {
 impl serde::Serialize for ByteBufB64 {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
-            format!("{B64_PREFIX}{}", BASE64_URL_SAFE.encode(&self.0)).serialize(serializer)
+            serializer.collect_str(self)
         } else {
             serializer.serialize_bytes(&self.0)
         }
@@ -688,7 +701,7 @@ impl serde::Serialize for ByteBufB64 {
 impl<const N: usize> serde::Serialize for ByteArrayB64<N> {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
-            format!("{B64_PREFIX}{}", BASE64_URL_SAFE.encode(self.0)).serialize(serializer)
+            serializer.collect_str(self)
         } else {
             serializer.serialize_bytes(&self.0)
         }
@@ -714,7 +727,7 @@ impl<'de, const N: usize> serde::Deserialize<'de> for ByteArrayB64<N> {
         if deserializer.is_human_readable() {
             deserializer.deserialize_any(deserialize::ByteArrayB64Visitor)
         } else {
-            deserializer.deserialize_byte_buf(deserialize::ByteArrayB64Visitor)
+            deserializer.deserialize_bytes(deserialize::ByteArrayB64Visitor)
         }
     }
 }
@@ -1166,9 +1179,9 @@ mod tests {
         arr.deref_mut()[2] = 6;
         assert_eq!(arr.deref(), &[4, 5, 6]);
         assert_eq!(arr.to_base64(), "BAUG");
-        assert_eq!(arr.clone().into_array(), [4, 5, 6]);
-        assert_eq!(arr.clone().into_vec(), vec![4, 5, 6]);
-        assert_eq!(arr.clone().into_iter().collect::<Vec<_>>(), vec![4, 5, 6]);
+        assert_eq!(arr.into_array(), [4, 5, 6]);
+        assert_eq!(arr.into_vec(), vec![4, 5, 6]);
+        assert_eq!(arr.into_iter().collect::<Vec<_>>(), vec![4, 5, 6]);
 
         for byte in &mut arr {
             *byte += 1;
@@ -1224,7 +1237,7 @@ mod tests {
 
         let array = ByteArrayB64::<0>::new();
         assert_eq!(array.as_slice(), &[] as &[u8]);
-        assert_eq!(array.clone().into_array(), [] as [u8; 0]);
+        assert_eq!(array.into_array(), [] as [u8; 0]);
         assert_eq!(array.into_vec(), Vec::<u8>::new());
 
         let buf = ByteBufB64::new();
@@ -1377,5 +1390,21 @@ mod tests {
                 .to_string()
                 .contains("bytes or string")
         );
+    }
+
+    #[test]
+    fn fixed_array_decodes_from_candid_and_indefinite_cbor() {
+        let value = ByteArrayB64::<4>::from([1, 2, 3, 4]);
+        let encoded = candid::encode_one(value).unwrap();
+        assert_eq!(
+            candid::decode_one::<ByteArrayB64<4>>(&encoded).unwrap(),
+            value
+        );
+        let indefinite = [0x5f, 0x42, 1, 2, 0x42, 3, 4, 0xff];
+        assert_eq!(
+            cbor_from_slice::<ByteArrayB64<4>>(&indefinite).unwrap(),
+            value
+        );
+        assert!(cbor_from_slice::<ByteArrayB64<3>>(&indefinite).is_err());
     }
 }

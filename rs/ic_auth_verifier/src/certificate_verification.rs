@@ -114,7 +114,7 @@ fn verify_delegation(
             }
         };
 
-    if !canister_ranges.is_empty() && !principal_is_within_ranges(&canister_id, &canister_ranges) {
+    if !principal_is_within_ranges(&canister_id, &canister_ranges) {
         // This subnet is not authorized to answer for this canister.
         return Err(format!(
             "canister {canister_id} is not in the delegated subnet's canister ranges"
@@ -168,7 +168,7 @@ fn verify_certificate_signature(certificate: &Certificate, der_key: &[u8]) -> Re
     msg.extend_from_slice(&certificate.tree.digest());
 
     let public_key = extract_der(der_key)?;
-    verify_bls_signature_cached(&public_key, &certificate.signature, &msg)
+    verify_bls_signature_cached(public_key, &certificate.signature, &msg)
 }
 
 /// Verifies a BLS signature, short-circuiting on a previously verified triple.
@@ -194,7 +194,7 @@ fn verify_bls_signature_cached(
 }
 
 /// Strips the DER prefix from a BLS public key.
-fn extract_der(buf: &[u8]) -> Result<Vec<u8>, String> {
+fn extract_der(buf: &[u8]) -> Result<&[u8], String> {
     let expected_length = DER_PREFIX.len() + KEY_LENGTH;
     if buf.len() != expected_length {
         return Err(format!(
@@ -205,7 +205,7 @@ fn extract_der(buf: &[u8]) -> Result<Vec<u8>, String> {
     if buf[..DER_PREFIX.len()] != DER_PREFIX[..] {
         return Err("DER key prefix mismatch".to_string());
     }
-    Ok(buf[DER_PREFIX.len()..].to_vec())
+    Ok(&buf[DER_PREFIX.len()..])
 }
 
 /// Parses a certificate from its CBOR encoding.
@@ -319,8 +319,7 @@ mod tests {
             &Principal::anonymous(),
             &ranges
         ));
-        // An empty range list matches nothing; the caller treats that as
-        // "ranges absent" rather than "nothing allowed".
+        // An empty or fully pruned range list proves no authority.
         assert!(!principal_is_within_ranges(&low, &[]));
     }
 
@@ -710,5 +709,76 @@ mod tests {
                 .unwrap_err()
                 .contains("self-describing tag")
         );
+    }
+
+    #[test]
+    fn empty_ranges_authorize_no_canisters() {
+        let subnet = TestSubnet::new();
+        for legacy in [false, true] {
+            let delegation = subnet.delegation_certificate(&[], legacy);
+            let certificate = subnet.certificate(&delegation);
+            let err = verify_certificate(
+                &certificate,
+                &[3],
+                &subnet.root_key_der(),
+                TestSubnet::NOW_NS,
+                0,
+            )
+            .unwrap_err();
+            assert!(err.contains("not in the delegated subnet's canister ranges"));
+        }
+    }
+
+    #[test]
+    fn pruning_ranges_does_not_remove_the_scope_check() {
+        let subnet = TestSubnet::new();
+        let inside = Principal::from_slice(&[1]);
+        let outside = Principal::from_slice(&[3]);
+        let ranges = [(inside, Principal::from_slice(&[2]))];
+        let mut delegation = subnet.delegation_certificate(&ranges, false);
+        let verify = |delegation: &Certificate, canister: &Principal| {
+            verify_certificate(
+                &subnet.certificate(delegation),
+                canister.as_slice(),
+                &subnet.root_key_der(),
+                TestSubnet::NOW_NS,
+                0,
+            )
+        };
+        verify(&delegation, &inside).unwrap();
+        assert!(verify(&delegation, &outside).is_err());
+        let range_subtree = match delegation
+            .tree
+            .lookup_subtree([b"canister_ranges".as_slice(), subnet.subnet_id.as_slice()])
+        {
+            SubtreeLookupResult::Found(tree) => tree,
+            _ => panic!("missing fixture subtree"),
+        };
+        let original_digest = delegation.tree.digest();
+        delegation.tree = fork(
+            labeled(
+                b"canister_ranges".to_vec(),
+                labeled(
+                    subnet.subnet_id.clone(),
+                    ic_certification::pruned(range_subtree.digest()),
+                ),
+            ),
+            fork(
+                labeled(
+                    b"subnet".to_vec(),
+                    labeled(
+                        subnet.subnet_id.clone(),
+                        labeled(b"public_key".to_vec(), leaf(der_encode(&subnet.subnet_key))),
+                    ),
+                ),
+                labeled(b"time".to_vec(), leaf(encode_leb128(TestSubnet::NOW_NS))),
+            ),
+        );
+        // Pruning preserves the original root signature, including cache hits.
+        assert_eq!(delegation.tree.digest(), original_digest);
+        for canister in [inside, outside] {
+            let err = verify(&delegation, &canister).unwrap_err();
+            assert!(err.contains("not in the delegated subnet's canister ranges"));
+        }
     }
 }

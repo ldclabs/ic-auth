@@ -1,8 +1,8 @@
+use crate::sha256;
 use candid::Principal;
 use ic_certification::{Certificate, HashTree, SubtreeLookupResult, leaf};
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
-use sha2::{Digest, Sha256};
 
 /// Default freshness window applied to a canister signature's certificate.
 ///
@@ -79,8 +79,8 @@ fn check_sig_path(
     canister_sig_pk: &CanisterSigPublicKey,
     msg: &[u8],
 ) -> Result<(), String> {
-    let seed_hash = hash_sha256(&canister_sig_pk.seed);
-    let msg_hash = hash_sha256(msg);
+    let seed_hash = sha256(&canister_sig_pk.seed);
+    let msg_hash = sha256(msg);
     let sig_path = ["sig".as_bytes(), &seed_hash, &msg_hash];
     let SubtreeLookupResult::Found(sig_leaf) = signature.tree.lookup_subtree(&sig_path) else {
         return Err("signature entry not found".to_string());
@@ -105,13 +105,6 @@ fn parse_signature_cbor(signature_cbor: &[u8]) -> Result<CanisterSignature, Stri
     }
     serde_cbor::from_slice::<CanisterSignature>(signature_cbor)
         .map_err(|e| format!("failed to parse signature CBOR: {e}"))
-}
-
-const SHA256_DIGEST_LEN: usize = 32;
-fn hash_sha256(data: &[u8]) -> [u8; SHA256_DIGEST_LEN] {
-    let mut hash = Sha256::default();
-    hash.update(data);
-    <[u8; SHA256_DIGEST_LEN]>::from(hash.finalize())
 }
 
 #[cfg(test)]
@@ -167,8 +160,8 @@ mod tests {
             "signature entry not found"
         );
 
-        let seed_hash = hash_sha256(&public_key.seed);
-        let msg_hash = hash_sha256(b"message");
+        let seed_hash = sha256(&public_key.seed);
+        let msg_hash = sha256(b"message");
         let signature = CanisterSignature {
             certificate: ByteBuf::from(vec![]),
             tree: labeled(
@@ -228,7 +221,7 @@ mod tests {
     #[test]
     fn test_hash_sha256_vector() {
         assert_eq!(
-            hex::encode(hash_sha256(b"abc")),
+            hex::encode(sha256(b"abc")),
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
         );
     }

@@ -22,12 +22,8 @@ axum-core = "0.5"
 axum = { version = "0.8", features = [
   "http1",
   "http2",
-  "json",
-  # "macros",
-  "matched-path",
   "tokio",
-  "query",
-], default-features = true }
+], default-features = false }
 bytes = "1.11"
 candid = { workspace = true }
 cbor2 = { workspace = true }
@@ -35,11 +31,12 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 http = { workspace = true }
 mime = "0.3"
-tokio = { version = "1", features = ["full"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "io-std", "sync"] }
 structured-logger = "1"
 log = { version = "0.4", features = ["kv_serde"] }
 
 [dev-dependencies]
+tokio = { version = "1", features = ["time"] }
 ic_auth_verifier = { path = "../ic_auth_verifier", version = "0.10", features = [
   "full",
 ] }
