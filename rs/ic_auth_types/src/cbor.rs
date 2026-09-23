@@ -1,4 +1,3 @@
-// SPDX-License-Identifier: Apache-2.0
 use serde::{de::DeserializeOwned, ser};
 use std::io::Write;
 

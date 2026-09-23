@@ -4,8 +4,7 @@ use serde::{Deserialize, Serialize};
 use simple_asn1::{ASN1Block, OID, from_der, oid};
 
 /// Public-key algorithms recognized in IC identity DER public keys.
-#[allow(non_camel_case_types)]
-#[derive(Debug, Serialize, Deserialize, PartialEq, Clone)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Algorithm {
     /// Internet Computer canister signature public key.

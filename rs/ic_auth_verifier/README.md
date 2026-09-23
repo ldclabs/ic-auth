@@ -107,10 +107,12 @@ Ed25519 verifies the message directly. P-256 and secp256k1 hash it with SHA-256 
 With `envelope` enabled:
 
 - `verify_sig` dispatches by DER public-key algorithm and uses the mainnet root key.
-- `verify_sig_with_rootkey` permits a custom IC root key.
+- `verify_sig_with_rootkey` permits a custom IC root key. Root keys are always DER-encoded (133 bytes, like `IC_ROOT_PK_DER`), not the raw 96-byte BLS key.
 - `verify_canister_sig` validates the signature tree, certified data, certificate signature, subnet delegation, canister ranges, and certificate time.
-- `verify_certificate` and `parse_certificate_cbor` expose certificate-level operations. Successful BLS verification is cached in a bounded in-memory cache.
-- `verify_delegation_chain` verifies a nonempty chain ending in the expected session key, with an optional root key. It does not take an expected target or enforce application permissions.
+- `verify_certificate` and `parse_certificate_cbor` expose certificate-level operations.
+- `verify_delegation_chain` verifies a nonempty chain ending in the expected session key, with an optional DER root key. It does not take an expected target or enforce application permissions.
+
+Successful BLS verifications and whole canister signatures are remembered in a bounded in-process cache. A repeated canister signature, such as the delegation a session sends with every request, is accepted after re-checking only its certificate time.
 
 The signature/certificate APIs take UNIX time in **nanoseconds**. `verify_canister_sig` defaults to a certificate time offset of 47 days in either direction; pass `Some(offset_ns)` for a different window. High-level envelope verification uses that default. Certificate freshness and delegation expiration are separate checks.
 

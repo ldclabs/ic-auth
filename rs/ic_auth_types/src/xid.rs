@@ -282,7 +282,7 @@ impl Display for Xid {
         bs[2] = ENC[((raw[1] >> 1) & 31) as usize];
         bs[1] = ENC[(((raw[1] >> 6) | (raw[0] << 2)) & 31) as usize];
         bs[0] = ENC[(raw[0] >> 3) as usize];
-        write!(f, "{}", std::str::from_utf8(&bs).expect("valid utf8"))
+        f.write_str(core::str::from_utf8(&bs).expect("valid utf8"))
     }
 }
 
@@ -346,7 +346,7 @@ impl Xid {
 impl serde::Serialize for Xid {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         if serializer.is_human_readable() {
-            self.to_string().serialize(serializer)
+            serializer.collect_str(self)
         } else {
             serializer.serialize_bytes(self.as_slice())
         }
@@ -425,20 +425,13 @@ mod deserialize {
 /// an ASCII character code, and the value is the corresponding base32 value
 /// (0-31) for that character. Only the indices for '0'-'9' and 'a'-'v' have
 /// meaningful values; all other indices contain zeros.
-#[rustfmt::skip]
 const fn gen_dec() -> [u8; 256] {
     let mut dec = [0_u8; 256];
-    // Fill in ranges b'0'..=b'9' and b'a'..=b'v'.
-    // dec[48..=57].copy_from_slice(&(0..=9).collect::<Vec<u8>>());
-    dec[48] = 0; dec[49] = 1; dec[50] = 2; dec[51] = 3; dec[52] = 4;
-    dec[53] = 5; dec[54] = 6; dec[55] = 7; dec[56] = 8; dec[57] = 9;
-    // dec[97..=118].copy_from_slice(&(10..=31).collect::<Vec<u8>>());
-    dec[ 97] = 10; dec[ 98] = 11; dec[ 99] = 12; dec[100] = 13;
-    dec[101] = 14; dec[102] = 15; dec[103] = 16; dec[104] = 17;
-    dec[105] = 18; dec[106] = 19; dec[107] = 20; dec[108] = 21;
-    dec[109] = 22; dec[110] = 23; dec[111] = 24; dec[112] = 25;
-    dec[113] = 26; dec[114] = 27; dec[115] = 28; dec[116] = 29;
-    dec[117] = 30; dec[118] = 31;
+    let mut i = 0;
+    while i < ENC.len() {
+        dec[ENC[i] as usize] = i as u8;
+        i += 1;
+    }
     dec
 }
 

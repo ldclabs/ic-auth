@@ -1,6 +1,6 @@
 use base64::{
     Engine,
-    engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE, URL_SAFE_NO_PAD},
+    engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
 use candid::{CandidType, Principal};
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName};
@@ -10,6 +10,7 @@ use ic_auth_types::{
 };
 use ic_representation_independent_hash::{Value as HashValue, representation_independent_hash};
 use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
 #[cfg(feature = "identity")]
 use ic_agent::{Identity, Signature};
@@ -19,8 +20,6 @@ use ic_canister_sig_creation::IC_ROOT_PK_DER;
 #[cfg(feature = "identity")]
 use crate::sha3_256;
 use crate::{Algorithm, user_public_key_from_der, verify_basic_sig, verify_canister_sig};
-
-// pub use ic_signature_verification::verify_canister_sig;
 
 /// The Internet Computer's anonymous principal identifier.
 /// This is used when no authenticated identity is provided.
@@ -76,7 +75,7 @@ pub fn verify_sig(
     public_key: &[u8],
     msg: &[u8],
     signature: &[u8],
-    current_time_ns: &u128,
+    current_time_ns: u128,
 ) -> Result<(), String> {
     verify_sig_with_rootkey(IC_ROOT_PK_DER, public_key, msg, signature, current_time_ns)
 }
@@ -86,7 +85,8 @@ pub fn verify_sig(
 /// a custom root public key.
 ///
 /// # Arguments
-/// * `ic_root_public_key_raw` - The raw IC root public key to use for verification
+/// * `ic_root_public_key_der` - The DER-encoded IC root public key to use for
+///   verification, such as [`IC_ROOT_PK_DER`]
 /// * `public_key` - The DER-encoded public key to verify against
 /// * `msg` - The message that was signed
 /// * `signature` - The signature to verify
@@ -96,11 +96,11 @@ pub fn verify_sig(
 /// * `Ok(())` if the signature is valid
 /// * `Err(String)` with an error message if verification fails
 pub fn verify_sig_with_rootkey(
-    ic_root_public_key_raw: &[u8],
+    ic_root_public_key_der: &[u8],
     public_key: &[u8],
     msg: &[u8],
     signature: &[u8],
-    current_time_ns: &u128,
+    current_time_ns: u128,
 ) -> Result<(), String> {
     let (alg, pk) = user_public_key_from_der(public_key)?;
     match alg {
@@ -108,7 +108,7 @@ pub fn verify_sig_with_rootkey(
             msg,
             signature,
             public_key,
-            ic_root_public_key_raw,
+            ic_root_public_key_der,
             current_time_ns,
             None,
         ),
@@ -322,7 +322,7 @@ impl SignedEnvelope {
             IC_ROOT_PK_DER,
         )?;
 
-        verify_sig(last_verified, digest, &self.signature, &current_time_ns)
+        verify_sig(last_verified, digest, &self.signature, current_time_ns)
     }
 
     /// Extracts a SignedEnvelope from the Authorization header.
@@ -383,9 +383,9 @@ impl SignedEnvelope {
         let digest = extract_data(headers, &HEADER_IC_AUTH_CONTENT_DIGEST)?;
         let signature = extract_data(headers, &HEADER_IC_AUTH_SIGNATURE)?;
         let delegation = match headers.get(&HEADER_IC_AUTH_DELEGATION) {
-            Some(_) => {
-                let data = extract_data(headers, &HEADER_IC_AUTH_DELEGATION)?;
-                Some(cbor_from_slice(&data[..]).ok()?)
+            Some(value) => {
+                let data = decode_base64(value.to_str().ok()?).ok()?;
+                Some(cbor_from_slice(&data).ok()?)
             }
             None => None,
         };
@@ -471,13 +471,14 @@ impl SignedEnvelope {
 /// * `session_pubkey` - The public key of the session to verify against
 /// * `delegations` - The chain of signed delegations to verify
 /// * `now_ms` - The current time in milliseconds since the Unix epoch
-/// * `ic_root_public_key_raw` - Optional raw IC root public key for signature verification
+/// * `ic_root_public_key_der` - Optional DER-encoded IC root public key for
+///   canister signatures; defaults to the mainnet key
 pub fn verify_delegation_chain(
     user_pubkey: &[u8],
     session_pubkey: &[u8],
     delegations: &[SignedDelegationCompact],
     now_ms: u64,
-    ic_root_public_key_raw: Option<&[u8]>,
+    ic_root_public_key_der: Option<&[u8]>,
 ) -> Result<(), String> {
     if delegations.is_empty() {
         return Err("Delegation chain is empty".to_string());
@@ -488,7 +489,7 @@ pub fn verify_delegation_chain(
         delegations,
         now_ms,
         None,
-        ic_root_public_key_raw.unwrap_or(IC_ROOT_PK_DER),
+        ic_root_public_key_der.unwrap_or(IC_ROOT_PK_DER),
     )?;
     if last_verified != session_pubkey {
         return Err(format!(
@@ -538,7 +539,7 @@ fn verify_delegations<'a>(
             last_verified,
             &message,
             &d.signature,
-            &current_time_ns,
+            current_time_ns,
         )?;
 
         last_verified = &d.delegation.pubkey;
@@ -623,13 +624,7 @@ fn delegation_signed_message(delegation: &DelegationCompact) -> Vec<u8> {
 /// # Returns
 /// * `Option<Vec<u8>>` - The decoded data, or None if not found or invalid
 pub fn extract_data(headers: &HeaderMap, key: &HeaderName) -> Option<Vec<u8>> {
-    if let Some(val) = headers.get(key)
-        && let Ok(val) = val.to_str()
-        && let Ok(data) = decode_base64(val)
-    {
-        return Some(data);
-    }
-    None
+    decode_base64(headers.get(key)?.to_str().ok()?).ok()
 }
 
 /// Extracts the authenticated user principal from the HTTP headers.
@@ -643,21 +638,19 @@ pub fn extract_data(headers: &HeaderMap, key: &HeaderName) -> Option<Vec<u8>> {
 /// # Returns
 /// * `Principal` - The authenticated user principal or anonymous principal
 pub fn extract_user(headers: &HeaderMap) -> Principal {
-    if let Some(caller) = headers.get(&HEADER_IC_AUTH_USER) {
-        if let Ok(caller) = Principal::from_text(caller.to_str().unwrap_or_default()) {
-            caller
-        } else {
-            ANONYMOUS_PRINCIPAL
-        }
-    } else {
-        ANONYMOUS_PRINCIPAL
-    }
+    headers
+        .get(&HEADER_IC_AUTH_USER)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|text| Principal::from_text(text).ok())
+        .unwrap_or(ANONYMOUS_PRINCIPAL)
 }
 
 /// Decodes base64-encoded data.
 ///
-/// This function handles both padded and unpadded data, in either the
-/// base64url or the standard base64 alphabet.
+/// Accepts exactly what [`ByteBufB64`] parses: the base64url or the standard
+/// alphabet, padded or not, with an optional `b64:` prefix. Padding must be
+/// well formed, so a run of `=` is rejected rather than decoded to nothing.
+/// Surrounding whitespace is ignored.
 ///
 /// # Arguments
 /// * `data` - The base64-encoded string to decode
@@ -665,20 +658,9 @@ pub fn extract_user(headers: &HeaderMap) -> Principal {
 /// # Returns
 /// * `Result<Vec<u8>, String>` - The decoded data or an error message
 pub fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
-    let trimmed = data.trim();
-    let data = trimmed.trim_end_matches('=');
-    // Base64 padding is never longer than two `=`. Stripping an unbounded run
-    // would decode `"===="` to empty bytes, so a garbage header would yield an
-    // empty key instead of being rejected.
-    if trimmed.len() - data.len() > 2 {
-        return Err("failed to decode base64 data: invalid padding".to_string());
-    }
-    if data.contains(['+', '/']) {
-        STANDARD_NO_PAD.decode(data)
-    } else {
-        URL_SAFE_NO_PAD.decode(data)
-    }
-    .map_err(|err| format!("failed to decode base64 data: {err}"))
+    ByteBufB64::from_str(data.trim())
+        .map(ByteBufB64::into_vec)
+        .map_err(|err| format!("failed to decode base64 data: {err}"))
 }
 
 /// Full-name representation of [`SignedEnvelope`].
@@ -912,7 +894,7 @@ mod tests {
         println!("canister_id: {}", cspk.canister_id.to_text());
         // canister_id: rrkah-fqaaa-aaaaa-aaaaq-cai
 
-        let res = verify_sig_with_rootkey(&root, &pk_der, &msg, &sig, &0);
+        let res = verify_sig_with_rootkey(&root, &pk_der, &msg, &sig, 0);
         println!("Verification result: {:?}", res);
         assert!(res.is_ok());
     }
@@ -927,10 +909,17 @@ mod tests {
     #[test]
     fn test_base64_and_header_helpers_reject_invalid_input() {
         assert!(decode_base64("%%%").is_err());
-        // both base64 alphabets are accepted, padded or not
+        // both base64 alphabets are accepted, padded or not, with or without
+        // the `b64:` prefix that `ByteBufB64` writes
         assert_eq!(decode_base64("-__v").unwrap(), vec![251, 255, 239]);
         assert_eq!(decode_base64("+//v").unwrap(), vec![251, 255, 239]);
-        assert_eq!(decode_base64("+//v==").unwrap(), vec![251, 255, 239]);
+        assert_eq!(decode_base64("b64:-__v").unwrap(), vec![251, 255, 239]);
+        assert_eq!(decode_base64("+/8=").unwrap(), vec![251, 255]);
+        assert_eq!(decode_base64("-_8").unwrap(), vec![251, 255]);
+        assert_eq!(decode_base64(" AQID ").unwrap(), vec![1, 2, 3]);
+        // padding after a complete quantum is not padding
+        assert!(decode_base64("+//v==").is_err());
+        assert!(decode_base64("AQID=").is_err());
 
         let mut headers = HeaderMap::new();
         headers.insert(&HEADER_IC_AUTH_PUBKEY, "%%%".parse().unwrap());

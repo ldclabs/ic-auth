@@ -10,8 +10,8 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-ic_auth_types = { path = "../ic_auth_types", version = "0.10" }
-candid = { workspace = true }
+ic_auth_types = { path = "../ic_auth_types", version = "0.10", optional = true }
+candid = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true, optional = true }
 serde_cbor = { workspace = true, optional = true }
@@ -28,7 +28,7 @@ ic-verify-bls-signature = { workspace = true, optional = true }
 arc-swap = { workspace = true, optional = true }
 http = { workspace = true, optional = true }
 base64 = { workspace = true, optional = true }
-hex = { workspace = true }
+hex = { workspace = true, optional = true }
 ic-agent = { workspace = true, optional = true }
 url = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
@@ -40,6 +40,7 @@ p256 = { workspace = true, features = ["std", "precomputed-tables"] }
 
 [dev-dependencies]
 cbor2 = { workspace = true }
+hex = { workspace = true }
 ic-agent = { workspace = true }
 rand = { workspace = true }
 
@@ -47,6 +48,7 @@ rand = { workspace = true }
 default = []
 full = ["identity"]
 envelope = [
+  "dep:ic_auth_types", "dep:candid", "dep:hex",
   "dep:http", "dep:base64", "dep:url", "dep:serde_bytes", "dep:serde_cbor",
   "dep:ic-representation-independent-hash", "dep:ic-certification",
   "dep:ic-verify-bls-signature",

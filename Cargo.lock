@@ -1508,6 +1508,7 @@ dependencies = [
  "serde_json",
  "structured-logger",
  "tokio",
+ "tower",
 ]
 
 [[package]]

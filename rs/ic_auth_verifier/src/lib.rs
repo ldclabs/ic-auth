@@ -38,7 +38,7 @@ pub mod deeplink;
 pub mod certificate_verification;
 
 #[cfg(feature = "envelope")]
-pub mod signature_cache;
+mod signature_cache;
 
 #[cfg(feature = "envelope")]
 mod ic_signature_verification;
@@ -271,7 +271,7 @@ VwidXc26G4+/g7dUbMwbN4E3d3bpxHEP31M+2by6jY67MqFKKroR
         let sig = id.sign_arbitrary(MESSAGE).unwrap();
         let pk_der = id.public_key().unwrap();
         let (alg, pk) = user_public_key_from_der(&pk_der).unwrap();
-        assert!(verify_basic_sig(alg.clone(), &pk, MESSAGE, &[]).is_err());
+        assert!(verify_basic_sig(alg, &pk, MESSAGE, &[]).is_err());
         assert_eq!(
             verify_basic_sig(alg, &pk, b"tampered", &sig.signature.unwrap()).unwrap_err(),
             "Ed25519 signature verification failed"

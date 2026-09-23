@@ -29,7 +29,8 @@ pub const IC_STATE_ROOT_DOMAIN_SEPARATOR: &[u8; 14] = b"\x0Dic-state-root";
 const DER_PREFIX: &[u8; 37] = b"\x30\x81\x82\x30\x1d\x06\x0d\x2b\x06\x01\x04\x01\x82\xdc\x7c\x05\x03\x01\x02\x01\x06\x0c\x2b\x06\x01\x04\x01\x82\xdc\x7c\x05\x03\x02\x01\x03\x61\x00";
 const KEY_LENGTH: usize = 96;
 
-/// Verifies a certificate against `root_public_key`.
+/// Verifies a certificate against `root_public_key`, the DER-encoded IC root
+/// public key.
 ///
 /// Checks, in order, that the certificate's `/time` is within
 /// `allowed_certificate_time_offset_ns` of `current_time_ns`, that any subnet
@@ -48,11 +49,13 @@ pub fn verify_certificate(
         allowed_certificate_time_offset_ns,
     )?;
 
-    let der_key = match &certificate.delegation {
-        Some(delegation) => verify_delegation(delegation, canister_id, root_public_key)?,
-        None => root_public_key.to_vec(),
-    };
-    verify_certificate_signature(certificate, &der_key)
+    match &certificate.delegation {
+        Some(delegation) => {
+            let subnet_key = verify_delegation(delegation, canister_id, root_public_key)?;
+            verify_certificate_signature(certificate, &subnet_key)
+        }
+        None => verify_certificate_signature(certificate, root_public_key),
+    }
 }
 
 /// Verifies the delegation certificate and returns the DER-encoded subnet key
@@ -133,7 +136,7 @@ fn verify_delegation(
     Ok(subnet_public_key.to_vec())
 }
 
-fn verify_certificate_time(
+pub(crate) fn verify_certificate_time(
     certificate: &Certificate,
     current_time_ns: u128,
     allowed_certificate_time_offset_ns: u128,
@@ -181,7 +184,7 @@ fn verify_bls_signature_cached(
     signature: &[u8],
     msg: &[u8],
 ) -> Result<(), String> {
-    let entry = SignatureCache::entry(public_key, signature, msg);
+    let entry = SignatureCache::entry(&[public_key, signature, msg]);
     if SignatureCache::global().contains(&entry) {
         return Ok(());
     }

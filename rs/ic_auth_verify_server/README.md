@@ -123,6 +123,7 @@ For CBOR requests, use `deterministicEncode` on the outer request object, keep e
 - `GET /` prefers a supported `Content-Type` header, otherwise negotiates `Accept` with quality values. Missing `Accept` and ordinary wildcards default to JSON. A request offering only unsupported response formats receives `406`.
 - Specific `Accept` ranges override wildcards, including `q=0` exclusions. Only JSON and CBOR are response candidates; an unsupported preferred format does not prevent selecting an acceptable supported format.
 - Errors produced while decoding or verifying payloads are plain text. An unsupported request content type returns `415` with no structured error body.
+- Request bodies are limited to 64 KiB; larger bodies receive `413`. A signed envelope, even with a full delegation chain, is a few kilobytes.
 
 | Status | Meaning |
 | --- | --- |
@@ -130,6 +131,7 @@ For CBOR requests, use `deterministicEncode` on the outer request object, keep e
 | `400` | Malformed JSON/CBOR, invalid field representation or length, or invalid embedded envelope CBOR |
 | `401` | Signature, delegation, target, expiration, or digest verification failed |
 | `406` | No supported response format for `GET /` |
+| `413` | Request body larger than 64 KiB |
 | `415` | Missing or unsupported POST `Content-Type` |
 
 See the verifier's [verification behavior](../ic_auth_verifier/README.md#verification-behavior) and [certificate defaults](../ic_auth_verifier/README.md#raw-signatures-and-certificates) for limits and time units.

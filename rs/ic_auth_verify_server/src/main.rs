@@ -9,18 +9,17 @@
 //! Set `SOCKET_ADDR` to change the listen address. The default is
 //! `127.0.0.1:8080`.
 
-use axum::{BoxError, http::StatusCode, response::IntoResponse};
 #[cfg(not(test))]
-use axum::{Router, routing};
+use axum::BoxError;
+use axum::{Router, extract::DefaultBodyLimit, http::StatusCode, response::IntoResponse, routing};
 use candid::Principal;
 use http::HeaderMap;
 use ic_auth_types::{ByteArrayB64, ByteBufB64, cbor_from_slice};
 use ic_auth_verifier::SignedEnvelope;
 use serde::{Deserialize, Serialize};
-use std::{
-    net::SocketAddr,
-    sync::{Arc, LazyLock},
-};
+#[cfg(not(test))]
+use std::net::SocketAddr;
+use std::sync::{Arc, LazyLock};
 use structured_logger::unix_ms;
 #[cfg(not(test))]
 use structured_logger::{Builder, async_json::new_writer, get_env_level};
@@ -33,6 +32,11 @@ use content::Content;
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Largest accepted request body. A signed envelope is a few kilobytes even
+/// with a full delegation chain, so this leaves ample headroom while keeping a
+/// client from making the server buffer megabytes per request.
+const MAX_BODY_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Deserialize, Serialize)]
 struct VerifyInput {
@@ -68,21 +72,23 @@ async fn main() -> Result<(), BoxError> {
         .with_target_writer("*", new_writer(tokio::io::stdout()))
         .init();
 
-    let signal = shutdown_signal();
-    let app = Router::new()
-        .route("/", routing::get(get_information))
-        .route("/verify", routing::post(post_verify));
-
     let addr_str = std::env::var("SOCKET_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let addr: SocketAddr = addr_str.parse()?;
-    let listener = create_reuse_port_listener(addr).await?;
+    let listener = tokio::net::TcpListener::bind(addr).await?;
     log::warn!("{}@{} listening on {:?}", APP_NAME, APP_VERSION, addr);
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(signal)
+    axum::serve(listener, app())
+        .with_graceful_shutdown(shutdown_signal())
         .await?;
 
     Ok(())
+}
+
+fn app() -> Router {
+    Router::new()
+        .route("/", routing::get(get_information))
+        .route("/verify", routing::post(post_verify))
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
 }
 
 #[cfg(not(test))]
@@ -110,20 +116,6 @@ pub async fn shutdown_signal() {
     }
 
     log::warn!("received termination signal, starting graceful shutdown");
-}
-
-pub async fn create_reuse_port_listener(
-    addr: SocketAddr,
-) -> Result<tokio::net::TcpListener, BoxError> {
-    let socket = match &addr {
-        SocketAddr::V4(_) => tokio::net::TcpSocket::new_v4()?,
-        SocketAddr::V6(_) => tokio::net::TcpSocket::new_v6()?,
-    };
-
-    socket.set_reuseport(true)?;
-    socket.bind(addr)?;
-    let listener = socket.listen(1024)?;
-    Ok(listener)
 }
 
 async fn get_information(headers: HeaderMap) -> impl IntoResponse {
@@ -386,24 +378,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_listener_accepts_ephemeral_address() {
-        assert_listener_or_permission("127.0.0.1:0").await;
-        assert_listener_or_permission("[::1]:0").await;
-    }
+    async fn app_routes_requests_and_limits_body_size() {
+        use tower::ServiceExt;
 
-    async fn assert_listener_or_permission(addr: &str) {
-        match create_reuse_port_listener(addr.parse().unwrap()).await {
-            Ok(listener) => assert!(listener.local_addr().unwrap().port() > 0),
-            Err(err) => {
-                if err
-                    .downcast_ref::<std::io::Error>()
-                    .is_some_and(|err| err.kind() == std::io::ErrorKind::PermissionDenied)
-                {
-                    return;
-                }
-                panic!("unexpected listener error for {addr}: {err}");
-            }
-        }
+        let post = |body: Vec<u8>| {
+            http::Request::post("/verify")
+                .header(http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from(body))
+                .unwrap()
+        };
+
+        let (input, user) = signed_verify_input();
+        let response = app()
+            .oneshot(post(serde_json::to_vec(&input).unwrap()))
+            .await
+            .unwrap();
+        let (status, _, body) = response_parts(response).await;
+        assert_eq!(status, StatusCode::OK);
+        let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(value["user"], user.to_text());
+
+        // Whitespace is valid JSON padding, so only the size limit can reject
+        // this body.
+        let response = app()
+            .oneshot(post(vec![b' '; MAX_BODY_BYTES + 1]))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+        let response = app()
+            .oneshot(
+                http::Request::get("/")
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
     }
 
     #[tokio::test]
