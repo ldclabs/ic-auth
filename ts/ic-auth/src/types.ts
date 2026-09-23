@@ -35,10 +35,10 @@ export function toDelegation(obj: Delegation | DelegationCompact): Delegation {
 
   const val: Delegation = {
     pubkey: obj.p,
-    expiration: obj.e
+    expiration: BigInt(obj.e)
   }
   if (obj.t) {
-    val.targets = obj.t
+    val.targets = obj.t.map((target) => Principal.fromUint8Array(target))
   }
   if (obj.perm) {
     val.permissions = obj.perm
@@ -52,8 +52,8 @@ export function toDelegation(obj: Delegation | DelegationCompact): Delegation {
  */
 export interface DelegationCompact {
   p: Uint8Array // pubkey
-  e: bigint // expiration
-  t?: Principal[] // targets
+  e: bigint | number // expiration; CBOR decodes safe integers as numbers
+  t?: Uint8Array[] // targets, encoded as CBOR byte strings
   perm?: DelegationPermissions // permissions
 }
 
@@ -72,7 +72,7 @@ export function toDelegationCompact(
     e: obj.expiration
   }
   if (obj.targets) {
-    val.t = obj.targets
+    val.t = obj.targets.map((target) => target.toUint8Array())
   }
   if (obj.permissions) {
     val.perm = obj.permissions
@@ -153,7 +153,7 @@ export function toDeepLinkSignInRequest(
 
   return {
     session_pubkey: obj.s,
-    max_time_to_live: obj.m
+    max_time_to_live: BigInt(obj.m)
   }
 }
 
@@ -162,7 +162,7 @@ export function toDeepLinkSignInRequest(
  */
 export interface DeepLinkSignInRequestCompact {
   s: Uint8Array // session_pubkey
-  m: bigint // max_time_to_live
+  m: bigint | number // max_time_to_live; CBOR decodes safe integers as numbers
 }
 
 /**
@@ -207,7 +207,7 @@ export function toDeepLinkSignInResponse(
 
   return {
     user_pubkey: obj.u,
-    delegations: obj.d,
+    delegations: obj.d.map(toSignedDelegation),
     authn_method: obj.a,
     origin: obj.o
   }
@@ -218,7 +218,7 @@ export function toDeepLinkSignInResponse(
  */
 export interface DeepLinkSignInResponseCompact {
   u: Uint8Array // user_pubkey
-  d: SignedDelegation[] // delegations
+  d: SignedDelegationCompact[] // delegations
   a: string // authn_method
   o: string // origin
 }
@@ -235,7 +235,7 @@ export function toDeepLinkSignInResponseCompact(
 
   return {
     u: obj.user_pubkey,
-    d: obj.delegations,
+    d: obj.delegations.map(toSignedDelegationCompact),
     a: obj.authn_method,
     o: obj.origin
   }
@@ -254,8 +254,16 @@ export interface SignedEnvelope {
   signature: Uint8Array
   /** Optional signed digest. */
   digest?: Uint8Array
-  /** Optional compact delegation chain. */
+  /** Optional full-name delegation chain. */
   delegation?: SignedDelegation[]
+}
+
+/** Legacy full-name envelope using `public_key` instead of `pubkey`. */
+export interface LegacySignedEnvelope {
+  public_key: Uint8Array
+  signature: Uint8Array
+  digest?: Uint8Array
+  delegation?: Array<SignedDelegation | SignedDelegationCompact>
 }
 
 /**
@@ -263,28 +271,22 @@ export interface SignedEnvelope {
  * full-name form.
  */
 export function toSignedEnvelope(
-  obj: SignedEnvelope | SignedEnvelopeCompact
+  obj: SignedEnvelope | SignedEnvelopeCompact | LegacySignedEnvelope
 ): SignedEnvelope {
   if ('pubkey' in obj && 'signature' in obj) {
     return obj
   }
 
   if ('public_key' in obj && 'signature' in obj) {
-    const o = obj as unknown as {
-      public_key: Uint8Array
-      signature: Uint8Array
-      digest?: Uint8Array
-      delegation?: Array<SignedDelegation | SignedDelegationCompact>
-    }
     const val: SignedEnvelope = {
-      pubkey: o.public_key,
-      signature: o.signature
+      pubkey: obj.public_key,
+      signature: obj.signature
     }
-    if (o.digest) {
-      val.digest = o.digest
+    if (obj.digest) {
+      val.digest = obj.digest
     }
-    if (o.delegation) {
-      val.delegation = o.delegation.map(toSignedDelegation)
+    if (obj.delegation) {
+      val.delegation = obj.delegation.map(toSignedDelegation)
     }
     return val
   }
@@ -316,14 +318,14 @@ export interface SignedEnvelopeCompact {
  * Converts full-name or compact envelope data into compact form.
  */
 export function toSignedEnvelopeCompact(
-  obj: SignedEnvelope | SignedEnvelopeCompact
+  obj: SignedEnvelope | SignedEnvelopeCompact | LegacySignedEnvelope
 ): SignedEnvelopeCompact {
   if ('p' in obj && 's' in obj) {
     return obj
   }
 
   const val: SignedEnvelopeCompact = {
-    p: obj.pubkey || (obj as any).public_key,
+    p: 'pubkey' in obj ? obj.pubkey : obj.public_key,
     s: obj.signature
   }
   if (obj.digest) {

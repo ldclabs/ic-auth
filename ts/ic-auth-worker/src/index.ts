@@ -22,11 +22,26 @@ export default {
 			ns.idFromName(name),
 			locationHint ? { locationHint } : undefined
 		)
+		const started = performance.now()
 		try {
-			return await container.containerFetch(request)
+			const response = await container.containerFetch(request)
+			// The Containers SDK also returns HTTP errors instead of rejecting.
+			if (response.status === 429 || response.status >= 500) {
+				console.warn('ic-auth upstream failure', {
+					instance: name,
+					status: response.status,
+					durationMs: Math.round(performance.now() - started)
+				})
+			}
+			return response
 		} catch (err) {
 			// Keep infrastructure failures distinct from rejected credentials (401).
-			console.error(`containerFetch failed on instance ${name}`, err)
+			console.error('ic-auth containerFetch rejected', {
+				instance: name,
+				status: 503,
+				durationMs: Math.round(performance.now() - started),
+				error: err
+			})
 			return Response.json(
 				{ error: 'ic-auth verifier unavailable' },
 				{ status: 503, headers: { 'retry-after': '1' } }

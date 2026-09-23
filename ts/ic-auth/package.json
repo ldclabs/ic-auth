@@ -27,10 +27,12 @@
   "typings": "./dist/index.d.ts",
   "scripts": {
     "build": "rm -rf dist && tsc -p tsconfig.json",
-    "format": "prettier --write \"src/**/*.{json,js,jsx,ts,tsx,css,scss}\"",
+    "format": "prettier --write src *.json README.md",
     "coverage": "vitest run --coverage",
     "test": "vitest run",
-    "ncu": "npx npm-check-updates -u"
+    "ncu": "npx npm-check-updates -u",
+    "format:check": "prettier --check src *.json README.md",
+    "typecheck": "tsc --noEmit -p tsconfig.test.json"
   },
   "peerDependencies": {
     "@icp-sdk/core": ">=5.0.0",
@@ -40,16 +42,9 @@
   "devDependencies": {
     "@icp-sdk/core": "^5.2.1",
     "@noble/hashes": "^2.4.0",
-    "@types/eslint": "^9.6.1",
     "@types/node": "25.6.0",
-    "@typescript-eslint/eslint-plugin": "^8.58.2",
-    "@typescript-eslint/parser": "^8.58.2",
     "@vitest/coverage-v8": "4.0.18",
     "cborg": "^5.1.0",
-    "eslint": "^10.2.0",
-    "eslint-config-prettier": "^10.1.8",
-    "eslint-plugin-import": "^2.32.0",
-    "eslint-plugin-prettier": "^5.5.5",
     "prettier": "^3.8.3",
     "typescript": "^6.0.2",
     "vitest": "4.0.18"

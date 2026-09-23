@@ -1,5 +1,6 @@
 import { Principal } from '@icp-sdk/core/principal'
 import { assert, describe, it } from 'vitest'
+import { decode, deterministicEncode } from './cbor.js'
 import {
   DeepLinkSignInRequest,
   DeepLinkSignInResponse,
@@ -32,7 +33,11 @@ describe('types', () => {
     }
     const compact = toDelegationCompact(full)
 
-    assert.deepEqual(compact, { p: pubkey, e: 123n, t: [target] })
+    assert.deepEqual(compact, {
+      p: pubkey,
+      e: 123n,
+      t: [target.toUint8Array()]
+    })
     assert.strictEqual(toDelegationCompact(compact), compact)
     assert.deepEqual(toDelegation(compact), full)
     assert.strictEqual(toDelegation(full), full)
@@ -42,6 +47,31 @@ describe('types', () => {
       expiration: 456n
     })
     assert.deepEqual(withoutTargets, { p: pubkey, e: 456n })
+  })
+
+  it.each(['queries', 'all'] as const)(
+    'preserves %s permissions through CBOR',
+    (permissions) => {
+      const full: Delegation = {
+        pubkey,
+        expiration: 123n,
+        targets: [Principal.anonymous()],
+        permissions
+      }
+      const wire = decode(deterministicEncode(toDelegationCompact(full)))
+      assert.deepEqual(wire.t, [new Uint8Array([4])])
+      assert.equal(wire.perm, permissions)
+      const restored = toDelegation(wire)
+      assert.deepEqual(restored, full)
+      assert.equal(restored.targets?.[0]?.toText(), '2vxsx-fae')
+    }
+  )
+
+  it('preserves empty target restrictions', () => {
+    const full: Delegation = { pubkey, expiration: 123n, targets: [] }
+    const wire = decode(deterministicEncode(toDelegationCompact(full)))
+    assert.deepEqual(wire.t, [])
+    assert.deepEqual(toDelegation(wire), full)
   })
 
   it('converts signed delegation forms', () => {
@@ -74,6 +104,8 @@ describe('types', () => {
     assert.strictEqual(toDeepLinkSignInRequestCompact(compact), compact)
     assert.deepEqual(toDeepLinkSignInRequest(compact), full)
     assert.strictEqual(toDeepLinkSignInRequest(full), full)
+    const decoded = decode(deterministicEncode({ s: pubkey, m: 60_000n }))
+    assert.equal(toDeepLinkSignInRequest(decoded).max_time_to_live, 60_000n)
   })
 
   it('converts deep-link sign-in response forms', () => {
@@ -94,12 +126,16 @@ describe('types', () => {
 
     assert.deepEqual(compact, {
       u: pubkey,
-      d: [delegation],
+      d: [{ d: { p: pubkey, e: 123n }, s: signature }],
       a: 'passkey',
       o: 'https://example.com'
     })
     assert.strictEqual(toDeepLinkSignInResponseCompact(compact), compact)
     assert.deepEqual(toDeepLinkSignInResponse(compact), full)
+    assert.deepEqual(
+      toDeepLinkSignInResponse(decode(deterministicEncode(compact))),
+      full
+    )
     assert.strictEqual(toDeepLinkSignInResponse(full), full)
   })
 
@@ -135,14 +171,14 @@ describe('types', () => {
         signature,
         digest,
         delegation: [delegation]
-      } as any),
+      }),
       full
     )
 
-    assert.deepEqual(
-      toSignedEnvelope({ public_key: pubkey, signature } as any),
-      { pubkey, signature }
-    )
+    assert.deepEqual(toSignedEnvelope({ public_key: pubkey, signature }), {
+      pubkey,
+      signature
+    })
 
     const fromCompact = toSignedEnvelope({ p: pubkey, s: signature })
     assert.deepEqual(fromCompact, { pubkey, signature })
@@ -157,7 +193,7 @@ describe('types', () => {
     })
 
     assert.deepEqual(
-      toSignedEnvelopeCompact({ public_key: pubkey, signature } as any),
+      toSignedEnvelopeCompact({ public_key: pubkey, signature }),
       {
         p: pubkey,
         s: signature

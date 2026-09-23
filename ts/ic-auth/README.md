@@ -14,11 +14,11 @@ npm install @ldclabs/ic-auth @icp-sdk/core @noble/hashes cborg
 
 The package ships ES modules and TypeScript declarations. It supports browser applications and declares Node.js `>=20.0.0`. Its peer dependency ranges are:
 
-| Dependency | Range |
-| --- | --- |
+| Dependency      | Range     |
+| --------------- | --------- |
 | `@icp-sdk/core` | `>=5.0.0` |
 | `@noble/hashes` | `>=1.8.0` |
-| `cborg` | `>=4.5.0` |
+| `cborg`         | `>=4.5.0` |
 
 The examples use top-level `await`, so run them as ES modules. The package has an independent release version from the Rust workspace; see [package.json](package.json).
 
@@ -60,10 +60,10 @@ const digest = sha3_256(requestBytes)
 const envelope = await signArbitrary(identity, digest)
 ```
 
-| Helper | Operation |
-| --- | --- |
-| `digestMessage(value)` | SHA3-256 of deterministic CBOR for `value` |
-| `signMessage(identity, value)` | Signs `digestMessage(value)` |
+| Helper                           | Operation                                              |
+| -------------------------------- | ------------------------------------------------------ |
+| `digestMessage(value)`           | SHA3-256 of deterministic CBOR for `value`             |
+| `signMessage(identity, value)`   | Signs `digestMessage(value)`                           |
 | `signArbitrary(identity, bytes)` | Signs the supplied bytes directly, storing them in `h` |
 
 Calling `signMessage` with a `Uint8Array` hashes its **CBOR byte-string encoding**, including the CBOR prefix. To match Rust's `SignedEnvelope::sign_message(identity, raw_bytes)`, hash the raw bytes with `sha3_256` and call `signArbitrary`, as above. Alternatively, deterministically CBOR-encode the same structured value in Rust before calling `sign_message`.
@@ -72,7 +72,7 @@ The SDK does not define the application's challenge schema. The verifier should 
 
 ## Deterministic CBOR and binary fields
 
-`deterministicEncode` wraps `cborg`'s `encode` with `rfc8949EncodeOptions`. The package also exports `encode`, `decode`, `rfc8949EncodeOptions`, and `compareBytes`.
+`deterministicEncode` wraps `cborg`'s `encode` with RFC 8949 options and explicitly selects the shortest floating-point representation. This keeps encoded bytes stable with cborg versions before 5.1.4, whose preset forced float64. The package also exports `encode`, `decode`, `rfc8949EncodeOptions`, and `compareBytes`; the re-exported options are cborg's own preset.
 
 Use `Uint8Array` for binary fields and `bigint` for delegation expiration in nanoseconds. Match the exact field names, value types, and optional-field presence on both sides when signing across languages. The default `encode` function is available for ordinary CBOR; use `deterministicEncode` for signed or hashed data.
 
@@ -80,15 +80,17 @@ Use `Uint8Array` for binary fields and `bigint` for delegation expiration in nan
 
 ## Compact types and conversions
 
-| Type | Compact keys |
-| --- | --- |
-| `SignedEnvelopeCompact` | `p`: public key; `s`: signature; `h`: optional digest; `d`: optional delegation chain |
-| `DelegationCompact` | `p`: delegated key; `e`: nanosecond expiration; `t`: optional targets; `perm`: optional permissions |
-| `SignedDelegationCompact` | `d`: delegation; `s`: signature |
-| `DeepLinkSignInRequestCompact` | `s`: session key; `m`: maximum lifetime in milliseconds |
-| `DeepLinkSignInResponseCompact` | `u`: user key; `d`: delegations; `a`: authentication method; `o`: origin |
+| Type                            | Compact keys                                                                                        |
+| ------------------------------- | --------------------------------------------------------------------------------------------------- |
+| `SignedEnvelopeCompact`         | `p`: public key; `s`: signature; `h`: optional digest; `d`: optional delegation chain               |
+| `DelegationCompact`             | `p`: delegated key; `e`: nanosecond expiration; `t`: optional targets; `perm`: optional permissions |
+| `SignedDelegationCompact`       | `d`: delegation; `s`: signature                                                                     |
+| `DeepLinkSignInRequestCompact`  | `s`: session key; `m`: maximum lifetime in milliseconds                                             |
+| `DeepLinkSignInResponseCompact` | `u`: user key; `d`: delegations; `a`: authentication method; `o`: origin                            |
 
-`DelegationPermissions` is `'queries' | 'all'`. Full-name types use `Uint8Array`, `bigint`, and `Principal` values. The `toDelegation`, `toSignedDelegation`, `toSignedEnvelope`, and deep-link converters each have a corresponding `...Compact` conversion.
+`DelegationPermissions` is `'queries' | 'all'`. Full-name types use `Uint8Array`, `bigint`, and `Principal` values. Compact delegation targets are `Uint8Array[]`, and compact deep-link responses contain `SignedDelegationCompact[]`. The converters restore Principal objects and bigint timestamps/lifetimes when expanding decoded compact payloads; compact integer fields accept `number | bigint` because CBOR decodes safe integers as numbers. The `toDelegation`, `toSignedDelegation`, `toSignedEnvelope`, and deep-link converters each have a corresponding `...Compact` conversion.
+
+When upgrading callers that construct compact payloads themselves, replace Principal targets with `target.toUint8Array()` and use compact nested delegations. Prefer the conversion helpers to build these payloads. Full-name types containing Principal objects should be converted to compact form before CBOR transport.
 
 ```typescript
 import { toSignedEnvelope, toSignedEnvelopeCompact } from '@ldclabs/ic-auth'
@@ -99,16 +101,16 @@ const full = toSignedEnvelope(compact)
 const converted = toSignedEnvelopeCompact(full)
 ```
 
-Converters map between typed shapes; they do not verify signatures or validate untrusted input. They may return the original object when it is already in the requested form. The TypeScript deep-link exports describe payloads and convert their fields; Rust provides the URL construction/parsing helpers.
+Converters map between typed shapes; they do not verify signatures or validate untrusted input. They may return the original object when it is already in the requested form. Envelope converters also accept the explicitly typed `LegacySignedEnvelope` shape with `public_key`. The TypeScript deep-link exports describe payloads and convert their fields; Rust provides the URL construction/parsing helpers.
 
 ## Base64 helpers
 
-| Helper | Encoding |
-| --- | --- |
-| `bytesToBase64Url(bytes)` | Unpadded Base64URL, suitable for envelope tokens |
-| `base64ToBytes(text)` | Decodes Base64URL after normalizing its alphabet |
-| `toBase64(bytes)` | Padded standard Base64 |
-| `fromBase64(text)` | Standard Base64 decoding using native helpers, Node `Buffer`, or browser `atob` |
+| Helper                    | Encoding                                                                                     |
+| ------------------------- | -------------------------------------------------------------------------------------------- |
+| `bytesToBase64Url(bytes)` | Unpadded Base64URL, suitable for envelope tokens                                             |
+| `base64ToBytes(text)`     | Base64URL decoding through `fromBase64`                                                      |
+| `toBase64(bytes)`         | Padded standard Base64                                                                       |
+| `fromBase64(text)`        | Standard Base64 or Base64URL decoding using native helpers, Node `Buffer`, or browser `atob` |
 
 Use `base64ToBytes` for URL-safe input across runtimes. These helpers return or accept unprefixed values; remove a Rust JSON wrapper's `b64:` prefix before decoding it here. Rust HTTP envelope tokens are already unprefixed.
 
@@ -118,12 +120,14 @@ From this directory, with Node.js and pnpm installed:
 
 ```bash
 pnpm install --frozen-lockfile
+pnpm format:check
+pnpm typecheck
 pnpm build
 pnpm test
 pnpm coverage
 ```
 
-`pnpm build` emits JavaScript and declarations into `dist`. Tests cover CBOR fixtures, wire conversions, delegation permissions, identity signing, and Base64 handling. `pnpm format` formats the source files with Prettier.
+`pnpm build` emits JavaScript and declarations into `dist`. `pnpm typecheck` checks source and test types. Tests cover CBOR fixtures shared with Rust, wire conversions, delegation permissions, identity signing, and native/Node/browser Base64 handling. CI also runs the SDK with the minimum supported cborg version. `pnpm format` formats sources, configuration and this README with Prettier.
 
 ## Related packages
 

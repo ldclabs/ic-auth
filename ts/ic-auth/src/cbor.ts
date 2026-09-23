@@ -2,6 +2,10 @@ import { encode, rfc8949EncodeOptions } from 'cborg'
 
 export { decode, encode, rfc8949EncodeOptions } from 'cborg'
 
+// cborg < 5.1.4 forced float64 in its RFC 8949 preset. Keep the shortest
+// representation stable across every supported cborg version.
+const deterministicOptions = { ...rfc8949EncodeOptions, float64: false }
+
 /**
  * Encodes data using RFC 8949 deterministic CBOR.
  *
@@ -9,8 +13,8 @@ export { decode, encode, rfc8949EncodeOptions } from 'cborg'
  * their deterministic encodings. Use this before hashing or signing IC-Auth
  * payloads so Rust and TypeScript produce the same bytes.
  */
-export function deterministicEncode(data: any): Uint8Array {
-  return encode(data, rfc8949EncodeOptions)
+export function deterministicEncode(data: unknown): Uint8Array {
+  return encode(data, deterministicOptions)
 }
 
 /**

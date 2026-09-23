@@ -25,6 +25,34 @@ jobs:
           cargo check --locked -p ic_auth_verifier --target wasm32-unknown-unknown
           cargo check --locked -p ic_auth_verifier --features envelope --target wasm32-unknown-unknown
 
+  sdk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ts/ic-auth
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: ts/ic-auth-worker/package.json
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check SDK
+        run: |
+          pnpm format:check
+          pnpm typecheck
+          pnpm build
+          pnpm test
+      - name: Check minimum supported cborg
+        run: |
+          pnpm add --save-dev --save-exact cborg@4.5.0
+          pnpm typecheck
+          pnpm build
+          pnpm test
+
   worker:
     runs-on: ubuntu-latest
     defaults:

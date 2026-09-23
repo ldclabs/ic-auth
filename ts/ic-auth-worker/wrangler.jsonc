@@ -16,7 +16,7 @@
 			// Build the verifier from this checkout; no account-specific registry.
 			"image": "../../rs/ic_auth_verify_server/Dockerfile",
 			"image_build_context": "../..",
-			// Nine regional names plus a default instance. Leave room for rollouts.
+			// Nine regional names plus a default instance.
 			"max_instances": 10
 		}
 	],

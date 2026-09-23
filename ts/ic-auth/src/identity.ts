@@ -1,8 +1,11 @@
-import { SignIdentity } from '@icp-sdk/core/agent'
+import type { SignIdentity } from '@icp-sdk/core/agent'
 import { DelegationChain, DelegationIdentity } from '@icp-sdk/core/identity'
 import { sha3_256 } from '@noble/hashes/sha3.js'
 import { deterministicEncode } from './cbor.js'
-import { SignedEnvelopeCompact, toSignedDelegationCompact } from './types.js'
+import {
+  type SignedEnvelopeCompact,
+  toSignedDelegationCompact
+} from './types.js'
 
 export { sha3_256 } from '@noble/hashes/sha3.js'
 
@@ -59,7 +62,7 @@ export async function signArbitrary(
 /**
  * Encodes an object as deterministic CBOR and returns its SHA3-256 digest.
  */
-export function digestMessage(obj: any): Uint8Array {
+export function digestMessage(obj: unknown): Uint8Array {
   const data = deterministicEncode(obj)
   return sha3_256(data)
 }
@@ -69,7 +72,7 @@ export function digestMessage(obj: any): Uint8Array {
  */
 export async function signMessage(
   identity: DelegationIdentity,
-  obj: any
+  obj: unknown
 ): Promise<SignedEnvelopeCompact> {
   return signArbitrary(identity, digestMessage(obj))
 }
@@ -81,11 +84,15 @@ export async function signMessage(
  * `Buffer`, then browser `btoa`.
  */
 export function toBase64(bytes: Uint8Array): string {
-  if (typeof (bytes as any).toBase64 === 'function') {
-    return (bytes as any).toBase64()
+  if (typeof bytes.toBase64 === 'function') {
+    return bytes.toBase64()
   }
   if (typeof Buffer !== 'undefined') {
-    return Buffer.from(bytes).toString('base64')
+    return Buffer.from(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength
+    ).toString('base64')
   }
   let result = ''
   const chunk = 0x8000
@@ -102,16 +109,16 @@ export function toBase64(bytes: Uint8Array): string {
  * `Buffer`, then browser `atob`.
  */
 export function fromBase64(str: string): Uint8Array {
-  if (typeof (Uint8Array as any).fromBase64 === 'function') {
+  if (typeof Uint8Array.fromBase64 === 'function') {
     if (str.includes('-') || str.includes('_')) {
-      return (Uint8Array as any).fromBase64(str, { alphabet: 'base64url' })
+      return Uint8Array.fromBase64(str, { alphabet: 'base64url' })
     }
-    return (Uint8Array as any).fromBase64(str)
+    return Uint8Array.fromBase64(str)
   }
   if (typeof Buffer !== 'undefined') {
     return new Uint8Array(Buffer.from(str, 'base64'))
   }
-  const binary = globalThis.atob(str)
+  const binary = globalThis.atob(str.replaceAll('-', '+').replaceAll('_', '/'))
   const out = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i)
   return out
@@ -121,6 +128,16 @@ export function fromBase64(str: string): Uint8Array {
  * Encodes bytes as unpadded Base64URL for IC-Auth headers and compact payloads.
  */
 export function bytesToBase64Url(bytes: Uint8Array): string {
+  if (typeof bytes.toBase64 === 'function') {
+    return bytes.toBase64({ alphabet: 'base64url', omitPadding: true })
+  }
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(
+      bytes.buffer,
+      bytes.byteOffset,
+      bytes.byteLength
+    ).toString('base64url')
+  }
   return toBase64(bytes)
     .replaceAll('+', '-')
     .replaceAll('/', '_')
@@ -131,6 +148,5 @@ export function bytesToBase64Url(bytes: Uint8Array): string {
  * Decodes unpadded Base64URL into bytes.
  */
 export function base64ToBytes(str: string): Uint8Array {
-  const padded = str.replaceAll('-', '+').replaceAll('_', '/')
-  return fromBase64(padded)
+  return fromBase64(str)
 }

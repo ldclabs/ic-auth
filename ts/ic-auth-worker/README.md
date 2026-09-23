@@ -9,7 +9,7 @@ This deployable application is open source under the MIT license. `private: true
 - `AuthContainer`: exposes port 8080, checks readiness at `GET /`, sleeps after 30 minutes of inactivity, and disables outbound container internet access.
 - Regional routing: nine named regions plus a shared `default`, so arbitrary caller input cannot create arbitrary instance names.
 - Transparent forwarding: JSON/CBOR bodies, headers, paths, and verifier status codes are preserved.
-- Availability errors: a rejected `containerFetch` produces JSON `503`, with `Retry-After: 1`. A verifier's `401` remains a credential rejection.
+- Availability errors: a rejected `containerFetch` produces JSON `503`, with `Retry-After: 1`. The Containers SDK can also resolve with a `503` (no capacity), `429` (startup rate limit), or `500` (startup/proxy failure); those responses are preserved, including any retry header. A verifier's `401` remains a credential rejection.
 - A shared root pnpm workspace and lockfile, generated Workers types, routing/forwarding tests, and CI checks.
 
 ## Prerequisites
@@ -115,7 +115,9 @@ Each regional name passes a matching Durable Object `locationHint`; the default 
 
 The copied colo table is a routing snapshot. Its splits at 104°W for North America and 19°E for Europe are application heuristics. Review it when adding colos; unknown entries already fall back safely. Source data is available from [Cloudflare's location list](https://speed.cloudflare.com/locations).
 
-The configuration permits 30 concurrently active containers for a roster of ten names. It is a ceiling, not a reservation. The 30-minute idle timeout favors warm verification instances; adjust it together with capacity for your traffic.
+The configuration permits 10 concurrently active containers for a roster of ten names. It is a ceiling, not a reservation. The 30-minute idle timeout favors warm verification instances; adjust it together with capacity for your traffic.
+
+The Worker logs the instance name, status and elapsed time for `429`/`5xx` responses and rejected container calls, without reading request or response bodies. Use `wrangler tail` during diagnosis, or enable Workers observability in your deployment to retain logs; it is disabled by default. Callers can retry a verification request a bounded number of times for transient `429`/`5xx` failures, honoring `Retry-After` when present and using backoff when it is absent. Do not retry credential rejections (`401`) unchanged. The Worker itself does not retry requests.
 
 ## Migration from the original project
 

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The Workers-only Container base class is exercised by Wrangler. Mock it here
 // so these tests can check our forwarding contract without Docker or an account.
@@ -21,6 +21,9 @@ function binding(response: Response) {
 	}
 }
 
+beforeEach(() => {
+	vi.spyOn(console, 'warn').mockImplementation(() => {})
+})
 afterEach(() => vi.restoreAllMocks())
 
 describe('Worker forwarding', () => {
@@ -81,7 +84,7 @@ describe('Worker forwarding', () => {
 		expect(new Uint8Array(await request.arrayBuffer())).toEqual(bytes)
 	})
 
-	it.each([400, 401, 404, 415, 500, 503])(
+	it.each([400, 401, 404, 415, 429, 500, 502, 503, 504])(
 		'preserves a verifier HTTP %i response',
 		async (status) => {
 			const upstream = new Response('upstream error', {
@@ -97,6 +100,50 @@ describe('Worker forwarding', () => {
 			expect(response).toBe(upstream)
 			expect(response.status).toBe(status)
 			expect(await response.text()).toBe('upstream error')
+			if (status === 429 || status >= 500) {
+				expect(console.warn).toHaveBeenCalledExactlyOnceWith(
+					'ic-auth upstream failure',
+					{
+						instance: 'default',
+						status,
+						durationMs: expect.any(Number)
+					}
+				)
+			} else {
+				expect(console.warn).not.toHaveBeenCalled()
+			}
+		}
+	)
+
+	it.each([
+		[503, 'There is no Container instance available at this time.'],
+		[429, 'you are requesting too many containers per second'],
+		[500, 'Failed to start container: startup timeout']
+	] as const)(
+		'preserves a resolved container failure (%i) and its retry guidance',
+		async (status, body) => {
+			const upstream = new Response(body, {
+				status,
+				headers: { 'retry-after': '3' }
+			})
+			const { env } = binding(upstream)
+			const response = await worker.fetch(
+				new Request('https://ic-auth.example/verify', {
+					headers: { 'x-edge-name': 'FRA' }
+				}),
+				env
+			)
+			expect(response).toBe(upstream)
+			expect(response.headers.get('retry-after')).toBe('3')
+			expect(await response.text()).toBe(body)
+			expect(console.warn).toHaveBeenCalledExactlyOnceWith(
+				'ic-auth upstream failure',
+				{
+					instance: 'weur',
+					status,
+					durationMs: expect.any(Number)
+				}
+			)
 		}
 	)
 
@@ -115,5 +162,14 @@ describe('Worker forwarding', () => {
 		expect(await response.json()).toEqual({
 			error: 'ic-auth verifier unavailable'
 		})
+		expect(console.error).toHaveBeenCalledExactlyOnceWith(
+			'ic-auth containerFetch rejected',
+			{
+				instance: 'default',
+				status: 503,
+				durationMs: expect.any(Number),
+				error: expect.any(Error)
+			}
+		)
 	})
 })

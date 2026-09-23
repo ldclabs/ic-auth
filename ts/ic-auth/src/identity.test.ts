@@ -1,10 +1,9 @@
 import { DelegationChain, DelegationIdentity } from '@icp-sdk/core/identity'
-import { assert, describe, it } from 'vitest'
+import { afterEach, assert, describe, it, vi } from 'vitest'
 import { deterministicEncode } from './cbor.js'
 import {
   base64ToBytes,
   bytesToBase64Url,
-  digestMessage,
   Ed25519KeyIdentity,
   fromBase64,
   signArbitrary,
@@ -101,132 +100,95 @@ describe('base64', () => {
     }
   })
 
-  it('uses native Uint8Array base64 helpers when present', () => {
-    const originalToBase64 = (Uint8Array.prototype as any).toBase64
-    const originalFromBase64 = (Uint8Array as any).fromBase64
-    const fromBase64Calls: any[] = []
+  const toBase64Descriptor = Object.getOwnPropertyDescriptor(
+    Uint8Array.prototype,
+    'toBase64'
+  )
+  const fromBase64Descriptor = Object.getOwnPropertyDescriptor(
+    Uint8Array,
+    'fromBase64'
+  )
 
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    for (const [target, key, descriptor] of [
+      [Uint8Array.prototype, 'toBase64', toBase64Descriptor],
+      [Uint8Array, 'fromBase64', fromBase64Descriptor]
+    ] as const) {
+      if (descriptor) Object.defineProperty(target, key, descriptor)
+      else Reflect.deleteProperty(target, key)
+    }
+  })
+
+  function disableNativeBase64() {
     Object.defineProperty(Uint8Array.prototype, 'toBase64', {
       configurable: true,
-      value(this: Uint8Array) {
-        assert.deepEqual(this, new Uint8Array([1, 2, 3]))
-        return 'native-base64'
-      }
+      value: undefined
     })
     Object.defineProperty(Uint8Array, 'fromBase64', {
       configurable: true,
-      value(value: string, options?: any) {
-        fromBase64Calls.push({ value, options })
-        return new Uint8Array([9, 8, 7])
-      }
+      value: undefined
+    })
+  }
+
+  it('uses native standard and URL-safe encoding options directly', () => {
+    const encode = vi.fn(() => 'native-encoded')
+    const decode = vi.fn(() => new Uint8Array([9, 8, 7]))
+    Object.defineProperty(Uint8Array.prototype, 'toBase64', {
+      configurable: true,
+      value: encode
+    })
+    Object.defineProperty(Uint8Array, 'fromBase64', {
+      configurable: true,
+      value: decode
     })
 
-    try {
-      assert.equal(toBase64(new Uint8Array([1, 2, 3])), 'native-base64')
-      assert.deepEqual(fromBase64('--__'), new Uint8Array([9, 8, 7]))
-      assert.deepEqual(fromBase64('AQID'), new Uint8Array([9, 8, 7]))
-      assert.deepEqual(fromBase64Calls, [
-        { value: '--__', options: { alphabet: 'base64url' } },
-        { value: 'AQID', options: undefined }
-      ])
-    } finally {
-      if (originalToBase64) {
-        Object.defineProperty(Uint8Array.prototype, 'toBase64', {
-          configurable: true,
-          value: originalToBase64
-        })
-      } else {
-        delete (Uint8Array.prototype as any).toBase64
-      }
-
-      if (originalFromBase64) {
-        Object.defineProperty(Uint8Array, 'fromBase64', {
-          configurable: true,
-          value: originalFromBase64
-        })
-      } else {
-        delete (Uint8Array as any).fromBase64
-      }
-    }
+    const bytes = new Uint8Array([1, 2, 3])
+    assert.equal(toBase64(bytes), 'native-encoded')
+    assert.equal(bytesToBase64Url(bytes), 'native-encoded')
+    assert.deepEqual(encode.mock.calls, [
+      [],
+      [{ alphabet: 'base64url', omitPadding: true }]
+    ])
+    assert.deepEqual(fromBase64('--__'), new Uint8Array([9, 8, 7]))
+    fromBase64('AQID')
+    base64ToBytes('--__')
+    assert.deepEqual(decode.mock.calls, [
+      ['--__', { alphabet: 'base64url' }],
+      ['AQID'],
+      ['--__', { alphabet: 'base64url' }]
+    ])
   })
 
-  it('uses Buffer fallback when native helpers are absent', () => {
-    const originalToBase64 = (Uint8Array.prototype as any).toBase64
-    const originalFromBase64 = (Uint8Array as any).fromBase64
-
-    delete (Uint8Array.prototype as any).toBase64
-    delete (Uint8Array as any).fromBase64
-
-    try {
-      const data = new Uint8Array([1, 2, 3, 4])
-      const encoded = toBase64(data)
-
-      assert.equal(encoded, Buffer.from(data).toString('base64'))
-      assert.deepEqual(fromBase64(encoded), data)
-    } finally {
-      if (originalToBase64) {
-        Object.defineProperty(Uint8Array.prototype, 'toBase64', {
-          configurable: true,
-          value: originalToBase64
-        })
+  it.each(['Buffer', 'browser'] as const)(
+    'round-trips offset views with the %s fallback',
+    (runtime) => {
+      disableNativeBase64()
+      if (runtime === 'browser') vi.stubGlobal('Buffer', undefined)
+      // Exclude sentinel bytes to exercise byteOffset and byteLength.
+      const view = new Uint8Array([0, 0xfb, 0xef, 0xff, 0]).subarray(1, 4)
+      assert.equal(toBase64(view), '++//')
+      assert.equal(bytesToBase64Url(view), '--__')
+      for (const encoded of ['++//', '--__']) {
+        assert.deepEqual(fromBase64(encoded), view)
+        assert.deepEqual(base64ToBytes(encoded), view)
       }
-      if (originalFromBase64) {
-        Object.defineProperty(Uint8Array, 'fromBase64', {
-          configurable: true,
-          value: originalFromBase64
-        })
+      for (const bytes of [
+        new Uint8Array(),
+        new Uint8Array([251]),
+        new Uint8Array([251, 255]),
+        pseudoRandomBytes(40000, 42)
+      ]) {
+        assert.deepEqual(fromBase64(toBase64(bytes)), bytes)
+        assert.deepEqual(base64ToBytes(bytesToBase64Url(bytes)), bytes)
       }
     }
-  })
+  )
 
-  it('falls back to btoa and atob without Buffer', () => {
-    const originalBuffer = (globalThis as any).Buffer
-    const originalBtoa = globalThis.btoa
-    const originalAtob = globalThis.atob
-    const originalToBase64 = (Uint8Array.prototype as any).toBase64
-    const originalFromBase64 = (Uint8Array as any).fromBase64
-
-    delete (Uint8Array.prototype as any).toBase64
-    delete (Uint8Array as any).fromBase64
-    ;(globalThis as any).Buffer = undefined
-    ;(globalThis as any).btoa = (binary: string) =>
-      originalBuffer.from(binary, 'binary').toString('base64')
-    ;(globalThis as any).atob = (base64: string) =>
-      originalBuffer.from(base64, 'base64').toString('binary')
-
-    try {
-      const data = pseudoRandomBytes(40000, 42)
-      const encoded = toBase64(data)
-      assert.deepEqual(fromBase64(encoded), data)
-    } finally {
-      ;(globalThis as any).Buffer = originalBuffer
-      ;(globalThis as any).btoa = originalBtoa
-      ;(globalThis as any).atob = originalAtob
-
-      if (originalToBase64) {
-        Object.defineProperty(Uint8Array.prototype, 'toBase64', {
-          configurable: true,
-          value: originalToBase64
-        })
-      }
-      if (originalFromBase64) {
-        Object.defineProperty(Uint8Array, 'fromBase64', {
-          configurable: true,
-          value: originalFromBase64
-        })
-      }
-    }
-  })
-})
-
-describe('digestMessage', () => {
-  it('hashes deterministic CBOR', () => {
-    const value = new Map<any, any>()
-    value.set('z', 'z')
-    value.set('aa', 'aa')
-
-    assert.deepEqual(digestMessage(value), digestMessage(value))
-    assert.deepEqual(digestMessage(value), digestMessage(value))
-    assert.equal(digestMessage(value).length, 32)
+  it('uses real browser atob semantics instead of a Buffer decoder', () => {
+    disableNativeBase64()
+    vi.stubGlobal('Buffer', undefined)
+    assert.throws(() => fromBase64('!'), /Invalid character/)
+    assert.deepEqual(fromBase64('-_8'), new Uint8Array([251, 255]))
   })
 })
