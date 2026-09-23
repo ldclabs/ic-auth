@@ -40,7 +40,9 @@ export default {
 				instance: name,
 				status: 503,
 				durationMs: Math.round(performance.now() - started),
-				error: err
+				// An Error nested in a logged object can serialize as `{}`, since its
+				// message and stack are not enumerable.
+				error: String(err)
 			})
 			return Response.json(
 				{ error: 'ic-auth verifier unavailable' },

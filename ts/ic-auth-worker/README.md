@@ -117,7 +117,7 @@ The copied colo table is a routing snapshot. Its splits at 104°W for North Amer
 
 The configuration permits 10 concurrently active containers for a roster of ten names. It is a ceiling, not a reservation. The 30-minute idle timeout favors warm verification instances; adjust it together with capacity for your traffic.
 
-The Worker logs the instance name, status and elapsed time for `429`/`5xx` responses and rejected container calls, without reading request or response bodies. Use `wrangler tail` during diagnosis, or enable Workers observability in your deployment to retain logs; it is disabled by default. Callers can retry a verification request a bounded number of times for transient `429`/`5xx` failures, honoring `Retry-After` when present and using backoff when it is absent. Do not retry credential rejections (`401`) unchanged. The Worker itself does not retry requests.
+The Worker logs the instance name, status and elapsed time for `429`/`5xx` responses, and additionally the error message for rejected container calls, without reading request or response bodies. Use `wrangler tail` during diagnosis, or enable Workers observability in your deployment to retain logs; it is disabled by default. Callers can retry a verification request a bounded number of times for transient `429`/`5xx` failures, honoring `Retry-After` when present and using backoff when it is absent. Do not retry credential rejections (`401`) unchanged. The Worker itself does not retry requests.
 
 ## Migration from the original project
 

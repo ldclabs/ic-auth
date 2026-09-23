@@ -168,7 +168,7 @@ describe('Worker forwarding', () => {
 				instance: 'default',
 				status: 503,
 				durationMs: expect.any(Number),
-				error: expect.any(Error)
+				error: 'Error: container unavailable'
 			}
 		)
 	})

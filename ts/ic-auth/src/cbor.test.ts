@@ -54,8 +54,6 @@ describe('cbor', () => {
   it('deterministicEncode', () => {
     const value = new Map<any, any>()
     value.set(false, false)
-    // value.set([-1], [-1])
-    // value.set([100], [100])
     value.set('aa', 'aa')
     value.set('z', 'z')
     value.set(-1, -1)

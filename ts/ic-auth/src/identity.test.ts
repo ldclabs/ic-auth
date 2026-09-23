@@ -153,9 +153,11 @@ describe('base64', () => {
     assert.deepEqual(fromBase64('--__'), new Uint8Array([9, 8, 7]))
     fromBase64('AQID')
     base64ToBytes('--__')
+    fromBase64('b64:--__')
     assert.deepEqual(decode.mock.calls, [
       ['--__', { alphabet: 'base64url' }],
       ['AQID'],
+      ['--__', { alphabet: 'base64url' }],
       ['--__', { alphabet: 'base64url' }]
     ])
   })
@@ -181,6 +183,27 @@ describe('base64', () => {
       ]) {
         assert.deepEqual(fromBase64(toBase64(bytes)), bytes)
         assert.deepEqual(base64ToBytes(bytesToBase64Url(bytes)), bytes)
+      }
+    }
+  )
+
+  // Node releases before 25 have no native decoder. The fallback there must
+  // not be `Buffer`, which skips invalid characters: it decoded `b64:AQID` to
+  // [111, 174, 0, 64, 128] and `AQ!D` to [1, 0] instead of failing.
+  it.each(['default', 'fallback'] as const)(
+    'rejects malformed input and accepts the Rust b64: prefix (%s decoder)',
+    (decoder) => {
+      if (decoder === 'fallback') disableNativeBase64()
+      assert.deepEqual(fromBase64('b64:AQID'), new Uint8Array([1, 2, 3]))
+      assert.deepEqual(base64ToBytes('b64:-_8'), new Uint8Array([251, 255]))
+      assert.deepEqual(fromBase64('b64:'), new Uint8Array())
+      for (const malformed of ['AQ!D', 'AQID====', 'b64:AQ!D', 'b64b64:AQID']) {
+        assert.throws(
+          () => fromBase64(malformed),
+          undefined,
+          undefined,
+          malformed
+        )
       }
     }
   )

@@ -12,14 +12,8 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "browser": {
-    "node:fs/promises": false,
-    "node:path": false,
-    "mime/lite": false
-  },
   "files": [
     "dist",
-    "package.json",
     "LICENSE",
     "README.md"
   ],

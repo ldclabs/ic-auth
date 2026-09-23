@@ -102,23 +102,27 @@ export function toBase64(bytes: Uint8Array): string {
   return globalThis.btoa(result)
 }
 
+/** Prefix the Rust types write before Base64URL byte fields in JSON. */
+const B64_PREFIX = 'b64:'
+
 /**
  * Decodes standard Base64 or Base64URL into bytes.
  *
- * Uses native `Uint8Array` helpers when available, then falls back to Node
- * `Buffer`, then browser `atob`.
+ * Padding is optional, and an optional `b64:` prefix, as written by the Rust
+ * types in JSON, is removed. Malformed input throws. Uses native `Uint8Array`
+ * helpers when available, then falls back to `atob`.
  */
 export function fromBase64(str: string): Uint8Array {
+  const data = str.startsWith(B64_PREFIX) ? str.slice(B64_PREFIX.length) : str
   if (typeof Uint8Array.fromBase64 === 'function') {
-    if (str.includes('-') || str.includes('_')) {
-      return Uint8Array.fromBase64(str, { alphabet: 'base64url' })
+    if (data.includes('-') || data.includes('_')) {
+      return Uint8Array.fromBase64(data, { alphabet: 'base64url' })
     }
-    return Uint8Array.fromBase64(str)
+    return Uint8Array.fromBase64(data)
   }
-  if (typeof Buffer !== 'undefined') {
-    return new Uint8Array(Buffer.from(str, 'base64'))
-  }
-  const binary = globalThis.atob(str.replaceAll('-', '+').replaceAll('_', '/'))
+  // Not Node's `Buffer`: it skips invalid characters instead of rejecting
+  // them, so malformed input would decode to the wrong bytes.
+  const binary = globalThis.atob(data.replaceAll('-', '+').replaceAll('_', '/'))
   const out = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i)
   return out
@@ -145,7 +149,7 @@ export function bytesToBase64Url(bytes: Uint8Array): string {
 }
 
 /**
- * Decodes unpadded Base64URL into bytes.
+ * Decodes Base64URL or standard Base64 into bytes; same as {@link fromBase64}.
  */
 export function base64ToBytes(str: string): Uint8Array {
   return fromBase64(str)

@@ -105,14 +105,14 @@ Converters map between typed shapes; they do not verify signatures or validate u
 
 ## Base64 helpers
 
-| Helper                    | Encoding                                                                                     |
-| ------------------------- | -------------------------------------------------------------------------------------------- |
-| `bytesToBase64Url(bytes)` | Unpadded Base64URL, suitable for envelope tokens                                             |
-| `base64ToBytes(text)`     | Base64URL decoding through `fromBase64`                                                      |
-| `toBase64(bytes)`         | Padded standard Base64                                                                       |
-| `fromBase64(text)`        | Standard Base64 or Base64URL decoding using native helpers, Node `Buffer`, or browser `atob` |
+| Helper                    | Encoding                                                                           |
+| ------------------------- | ---------------------------------------------------------------------------------- |
+| `bytesToBase64Url(bytes)` | Unpadded Base64URL, suitable for envelope tokens                                   |
+| `base64ToBytes(text)`     | Same as `fromBase64`                                                               |
+| `toBase64(bytes)`         | Padded standard Base64                                                             |
+| `fromBase64(text)`        | Standard Base64 or Base64URL decoding using native helpers, or `atob` without them |
 
-Use `base64ToBytes` for URL-safe input across runtimes. These helpers return or accept unprefixed values; remove a Rust JSON wrapper's `b64:` prefix before decoding it here. Rust HTTP envelope tokens are already unprefixed.
+Decoding accepts padded or unpadded input in either alphabet, and removes the `b64:` prefix that the Rust types write for byte fields in JSON. Malformed input throws in every runtime. The encoders return unprefixed values, which Rust also accepts.
 
 ## Development
 
