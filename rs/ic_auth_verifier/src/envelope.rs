@@ -4,9 +4,10 @@ use base64::{
 };
 use candid::{CandidType, Principal};
 use http::header::{AUTHORIZATION, HeaderMap, HeaderName};
+pub use ic_auth_types::DelegationPermissions;
 use ic_auth_types::{
-    ByteBufB64, DelegationCompact, DelegationPermissions, SignedDelegation,
-    SignedDelegationCompact, cbor_from_slice, deterministic_cbor_into_vec,
+    ByteBufB64, DelegationCompact, SignedDelegation, SignedDelegationCompact, cbor_from_slice,
+    deterministic_cbor_into_vec,
 };
 use ic_representation_independent_hash::{Value as HashValue, representation_independent_hash};
 use serde::{Deserialize, Serialize};
@@ -17,16 +18,17 @@ use ic_agent::{Identity, Signature};
 
 use ic_canister_sig_creation::IC_ROOT_PK_DER;
 
+use crate::ic_signature_verification::verify_canister_sig_raw;
 #[cfg(feature = "identity")]
 use crate::sha3_256;
-use crate::{Algorithm, user_public_key_from_der, verify_basic_sig, verify_canister_sig};
+use crate::{Algorithm, MAX_CERT_TIME_OFFSET_NS, asn1::parse_public_key, verify_basic_sig};
 
 /// The Internet Computer's anonymous principal identifier.
 /// This is used when no authenticated identity is provided.
 pub const ANONYMOUS_PRINCIPAL: Principal = Principal::anonymous();
 
 /// Maximum allowed time drift in milliseconds for delegation verification.
-/// This prevents replay attacks while allowing for reasonable clock differences.
+/// Expiration checks allow this much skew between clocks.
 pub const PERMITTED_DRIFT_MS: u64 = 300 * 1000;
 
 /// Maximum allowed delegation chain length.
@@ -102,17 +104,35 @@ pub fn verify_sig_with_rootkey(
     signature: &[u8],
     current_time_ns: u128,
 ) -> Result<(), String> {
-    let (alg, pk) = user_public_key_from_der(public_key)?;
+    verify_signature(
+        ic_root_public_key_der,
+        public_key,
+        msg,
+        signature,
+        current_time_ns,
+        MAX_CERT_TIME_OFFSET_NS,
+    )
+}
+
+fn verify_signature(
+    ic_root_public_key_der: &[u8],
+    public_key: &[u8],
+    msg: &[u8],
+    signature: &[u8],
+    current_time_ns: u128,
+    allowed_certificate_time_offset_ns: u128,
+) -> Result<(), String> {
+    let (alg, pk) = parse_public_key(public_key)?;
     match alg {
-        Algorithm::IcCanisterSignature => verify_canister_sig(
+        Algorithm::IcCanisterSignature => verify_canister_sig_raw(
             msg,
             signature,
-            public_key,
+            pk,
             ic_root_public_key_der,
             current_time_ns,
-            None,
+            allowed_certificate_time_offset_ns,
         ),
-        _ => verify_basic_sig(alg, &pk, msg, signature),
+        _ => verify_basic_sig(alg, pk, msg, signature),
     }
 }
 
@@ -299,6 +319,27 @@ impl SignedEnvelope {
         expect_target: Option<Principal>,
         expect_digest: Option<&[u8]>,
     ) -> Result<(), String> {
+        self.verify_with_certificate_time_offset(
+            now_ms,
+            expect_target,
+            expect_digest,
+            MAX_CERT_TIME_OFFSET_NS,
+        )
+        .map(|_| ())
+    }
+
+    /// Verifies the envelope and returns the effective permissions of the verified chain.
+    ///
+    /// Every canister signature, including the final signature, must have a
+    /// certificate within `allowed_certificate_time_offset_ns` of `now_ms`.
+    /// Any query-only link restricts the entire chain to queries and read_state.
+    pub fn verify_with_certificate_time_offset(
+        &self,
+        now_ms: u64,
+        expect_target: Option<Principal>,
+        expect_digest: Option<&[u8]>,
+        allowed_certificate_time_offset_ns: u128,
+    ) -> Result<DelegationPermissions, String> {
         let current_time_ns = now_ms as u128 * 1_000_000;
         let digest = match (self.digest.as_ref(), expect_digest) {
             (Some(digest), Some(expect_digest)) => {
@@ -314,15 +355,24 @@ impl SignedEnvelope {
             }
         };
 
-        let last_verified = verify_delegations(
+        let (last_verified, permissions) = verify_delegations(
             &self.pubkey,
             self.delegation.as_deref().unwrap_or_default(),
             now_ms,
             expect_target,
             IC_ROOT_PK_DER,
+            allowed_certificate_time_offset_ns,
         )?;
 
-        verify_sig(last_verified, digest, &self.signature, current_time_ns)
+        verify_signature(
+            IC_ROOT_PK_DER,
+            last_verified,
+            digest,
+            &self.signature,
+            current_time_ns,
+            allowed_certificate_time_offset_ns,
+        )?;
+        Ok(permissions)
     }
 
     /// Extracts a SignedEnvelope from the Authorization header.
@@ -377,10 +427,14 @@ impl SignedEnvelope {
     ///
     /// # Returns
     /// * `Option<Self>` - The extracted envelope, or None if not found or invalid.
-    ///   A delegation header that is present but malformed invalidates the whole envelope.
+    ///   A missing digest can be supplied at verification. An invalid digest
+    ///   or delegation header invalidates the whole envelope.
     pub fn from_headers(headers: &HeaderMap) -> Option<Self> {
         let pubkey = extract_data(headers, &HEADER_IC_AUTH_PUBKEY)?;
-        let digest = extract_data(headers, &HEADER_IC_AUTH_CONTENT_DIGEST)?;
+        let digest = match headers.get(&HEADER_IC_AUTH_CONTENT_DIGEST) {
+            Some(value) => Some(decode_base64(value.to_str().ok()?).ok()?.into()),
+            None => None,
+        };
         let signature = extract_data(headers, &HEADER_IC_AUTH_SIGNATURE)?;
         let delegation = match headers.get(&HEADER_IC_AUTH_DELEGATION) {
             Some(value) => {
@@ -393,7 +447,7 @@ impl SignedEnvelope {
         Some(Self {
             pubkey: pubkey.into(),
             signature: signature.into(),
-            digest: Some(digest.into()),
+            digest,
             delegation,
         })
     }
@@ -484,12 +538,13 @@ pub fn verify_delegation_chain(
         return Err("Delegation chain is empty".to_string());
     }
 
-    let last_verified = verify_delegations(
+    let (last_verified, _) = verify_delegations(
         user_pubkey,
         delegations,
         now_ms,
         None,
         ic_root_public_key_der.unwrap_or(IC_ROOT_PK_DER),
+        MAX_CERT_TIME_OFFSET_NS,
     )?;
     if last_verified != session_pubkey {
         return Err(format!(
@@ -504,15 +559,15 @@ pub fn verify_delegation_chain(
     Ok(())
 }
 
-/// Verifies each link and returns the key authorized by the chain. An empty
-/// chain leaves the original key authorized, as required by plain envelopes.
+/// Returns the final signing key and the permissions shared by every link.
 fn verify_delegations<'a>(
     user_pubkey: &'a [u8],
     delegations: &'a [SignedDelegationCompact],
     now_ms: u64,
     expect_target: Option<Principal>,
     ic_root_public_key_der: &[u8],
-) -> Result<&'a [u8], String> {
+    allowed_certificate_time_offset_ns: u128,
+) -> Result<(&'a [u8], DelegationPermissions), String> {
     if delegations.len() > MAX_DELEGATION_CHAIN_LENGTH {
         return Err(format!(
             "Delegation chain length exceeds the limit {}: {}",
@@ -523,6 +578,7 @@ fn verify_delegations<'a>(
 
     let current_time_ns = now_ms as u128 * 1_000_000;
     let mut last_verified = user_pubkey;
+    let mut permissions = DelegationPermissions::All;
     for d in delegations {
         check_delegation_expiration(d.delegation.expiration, now_ms)?;
         if let (Some(targets), Some(target)) = (&d.delegation.targets, &expect_target)
@@ -534,17 +590,21 @@ fn verify_delegations<'a>(
         }
 
         let message = delegation_signed_message(&d.delegation);
-        verify_sig_with_rootkey(
+        verify_signature(
             ic_root_public_key_der,
             last_verified,
             &message,
             &d.signature,
             current_time_ns,
+            allowed_certificate_time_offset_ns,
         )?;
 
+        if d.delegation.permissions == Some(DelegationPermissions::Queries) {
+            permissions = DelegationPermissions::Queries;
+        }
         last_verified = &d.delegation.pubkey;
     }
-    Ok(last_verified)
+    Ok((last_verified, permissions))
 }
 
 fn is_delegation_expired(expiration_ns: u64, now_ms: u64) -> bool {
@@ -648,8 +708,8 @@ pub fn extract_user(headers: &HeaderMap) -> Principal {
 /// Decodes base64-encoded data.
 ///
 /// Accepts exactly what [`ByteBufB64`] parses: the base64url or the standard
-/// alphabet, padded or not, with an optional `b64:` prefix. Padding must be
-/// well formed, so a run of `=` is rejected rather than decoded to nothing.
+/// alphabet, padded or not, with an optional `b64:` prefix. Padding can fill
+/// only the unused positions in the final group.
 /// Surrounding whitespace is ignored.
 ///
 /// # Arguments
@@ -671,7 +731,7 @@ pub fn decode_base64(data: &str) -> Result<Vec<u8>, String> {
 #[derive(Clone, Debug, CandidType, Deserialize, Serialize)]
 pub struct SignedEnvelopeFull {
     /// The DER public key of the user identity.
-    #[serde(alias = "p")]
+    #[serde(alias = "p", alias = "public_key")]
     pub pubkey: ByteBufB64,
 
     /// The signature over the envelope digest.
@@ -720,6 +780,7 @@ mod tests {
     use super::*;
     #[cfg(feature = "identity")]
     use crate::unix_timestamp;
+    use crate::user_public_key_from_der;
     #[cfg(feature = "identity")]
     use cbor2::Value;
     #[cfg(feature = "identity")]
@@ -773,6 +834,10 @@ mod tests {
         let digest = sha3_256(msg);
         let sig = id.sign_arbitrary(digest.as_slice()).unwrap();
         let se: SignedEnvelope = sig.try_into().unwrap();
+        se.to_headers(&mut headers).unwrap();
+        let se = SignedEnvelope::from_headers(&headers).unwrap();
+        assert!(se.digest.is_none());
+        assert!(se.verify(0, None, None).is_err());
         assert!(
             se.verify(
                 unix_timestamp().as_millis() as u64,
@@ -863,6 +928,11 @@ mod tests {
         let rt = se.verify(1772449812590u64, None, None);
         println!("Verification result: {:?}", rt);
         assert!(rt.is_ok());
+        // A cached canister-signed delegation still uses the caller's window.
+        let err = se
+            .verify_with_certificate_time_offset(1772449812591, None, None, 0)
+            .unwrap_err();
+        assert!(err.contains("certificate time"), "{err}");
 
         // generated by ic-certification 3.1
         let msg = "pGFkgaJhZKJhZRsYprjiTQ1kp2FwWCwwKjAFBgMrZXADIQCA6d4AfqWkdFNu5tbaLp7r9jDxilfJvcLWRdIYzSior2FzWQc02dn3omtjZXJ0aWZpY2F0ZVkGWdnZ96NkdHJlZYMBgwGDAYIEWCD_2rktIbM7CQPjMFxdtgoXDsQBe6ZnfYHz_VEkO7uCtYMCSGNhbmlzdGVygwGDAYMBgwJKAAAAAAAAAAcBAYMBgwGDAk5jZXJ0aWZpZWRfZGF0YYIDWCB2gerHLFm4j1TskyiMYwuJVjti6AkhLhUkmf3yVzgt44IEWCDY9k96_KalXU7m3tmwIAusZlHK9MehkgIStaA8m_HfNoIEWCClii6jhbz6sPHd0uk34rJi6t4x2zU7ap7pu2pHQee1S4IEWCBthgttL0RxWKx9zQUzB1VVoDJfNVBABnygDRTTlPpcd4IEWCA7n254mzmU7xueyXf_BwN4PmMyXI3ZkEy2ep_1MtzWEYIEWCDSHJjM3167Pm98kHUeDMXaLF_cPTiJsu1zlQKZG7gnQoIEWCBZMddBC0-Quz23yaa-wGXhf4sJJ0CMVlNApcf6P0M2toMBggRYIIRNgDlknNZ00VrpChW1u2EkiJpLHm16Aaw9s81wxyw9gwGCBFggMm2roqFHTU5jlTeTnwz61Y9afsoeE1dBam7LurSMO1mDAkR0aW1lggNJp8mtrpTv4M4YaXNpZ25hdHVyZVgwsUfGmq1hpWv0RXnDU4isnnsrytYCYohlaDj8KpVrF95OaVWcsgyBWomgsYtLoxPqamRlbGVnYXRpb26iaXN1Ym5ldF9pZFgdQ9yvEYDbgv2nCM46x6A6YGCr3hPpVGxg6MzmXQJrY2VydGlmaWNhdGVZBBjZ2feiZHRyZWWDAYMBggRYIK3tAhG-5CMHRe6B6HYrumYzszgynK2_Cyk3lgxiz-VegwGDAk9jYW5pc3Rlcl9yYW5nZXODAYMBggRYIPWzPdcCUOwykUxZYJMI-zG0o1JPBtxcycR-ltOoWzQKgwGDAYMBgwGDAlgdQ9yvEYDbgv2nCM46x6A6YGCr3hPpVGxg6MzmXQKDAkoAAAAAAAAABwEBggNYMtnZ94KCSgAAAAAAAAAHAQFKAAAAAAAAAAcBAYJKAAAAAAIQAAABAUoAAAAAAh___wEBggRYIJ2wKoflpjM_8kD8PoQJl7Pvux0kvc21FZQlcEpPjebeggRYIGBtpBoQkI8sWSD0kMaU5qqTdy-kUVf1tmSbla42it92ggRYIOyolKEQ1iwzQOQhsmpRZ-DqycNrnX_QlOFSvAY74bT8ggRYIKvGtteIKoBa9myTiVb5LgymcFkhzR8PhHkWmb9ddOKMggRYIHddYNv5vlTceU_HgpFF5d20rbT5bWhGm-sx-i-4LQsLggRYIAH0KcEdL8U24W7AywFr3_rR_1KtobDR9S_4zxJRVn0UgwGCBFggeePKvLIybJiV9N45REvhjwjws9fpaA2eiaYKSPqhZ_yDAYMCRnN1Ym5ldIMBgwGCBFggiISkVrMM0Rk0jF71z1nHVHXloWSxxt03W_wPRhKANMKDAYMBgwGDAYMCWB1D3K8RgNuC_acIzjrHoDpgYKveE-lUbGDozOZdAoMBgwGCBFggUIlMwLMiEhS4oN4qyA9F8qOf6QkRzQ0IjhmShRyLJ-mDAkpwdWJsaWNfa2V5ggNYhTCBgjAdBg0rBgEEAYLcfAUDAQIBBgwrBgEEAYLcfAUDAgEDYQC4ieTY7N4ygloINeZtUp4xnnQ0zOjf46zvEQUmWZddy2S5FLKyfo1074rd2x54ELYAafalCVM8vPlwsSaPNnUFZVeYJdcZ8oPspK1uK7dugf1KdhGPTTmZ7isTqlnR_GmCBFggOtxzXIoxJu5vYSDBubz8MoJVDYZct-cjWYzLeTdyU5KCBFggNgnQcvmXshXCdPo1-Q72q0aowcpaEHxogyGI4WwCWPKCBFggj4x3eo7K7qsgb-JEuWw_9DcMe2RulRtusZKIgE7JCAyCBFgg2cEDpvexMjtphCR0PV8O8jGeRQXzwnGxohAmgy9KAbKCBFggYOlh9AO7NO3rkGDg86e0FJjFS5hp97IJEtK2fTj5Fo2CBFggOv_0dwIPh6D4tdK_kb9vQEszT-3myESFPY98--7BKfWDAkR0aW1lggNJo8Kk9ent4M4YaXNpZ25hdHVyZVgwhYPOO9jW_tQ5NAMfHRb2rICF9TnGmipUNRTkhaIOvsiy_VkrpQJGtSA7noPJuKEEZHRyZWWDAYIEWCAd1PxBigg-1t83kV57jr2buakKUEVB_liWTXLdBoAtOIMCQ3NpZ4MBgwGDAlggBYX1pW_0nbODY6WVI_XoWnz46JsL1yG2omXetIl1irWDAlggkxDcFnea8djFW-ISPfIwEdE-KvsXYYMq6_WnceSpqhmCA0CCBFggv3BAqPUThOCNdaS-f7TRhEu6A1izhQIvkbUeggveE7OCBFggRpEubsoN-OjKpzy8IAo9jGIQFCCVntAMhOVobFPyHJVhaFggrQaFGeXvwG47mPtg184iJUpbfwDtMVhSJQinJDD7c6lhcFg-MDwwDAYKKwYBBAGDuEMBAgMsAAoAAAAAAAAABwEBkVc8F_k6Ukkl1TQM_crFVBrhBzqDMR65DDzNGLoK-E5hc1hAsLo4H4SdoWumrYdekdP1oBIeOE-W5G8BanUak3w7TPCSZv1IBRu0iMW9x1AoA3EftD9ckUM_54hG21KCEknWCA";
@@ -897,6 +967,8 @@ mod tests {
         let res = verify_sig_with_rootkey(&root, &pk_der, &msg, &sig, 0);
         println!("Verification result: {:?}", res);
         assert!(res.is_ok());
+        verify_signature(&root, &pk_der, &msg, &sig, 0, 1_234_567).unwrap();
+        assert!(verify_signature(&root, &pk_der, &msg, &sig, 0, 1_234_566).is_err());
     }
 
     #[test]
@@ -960,6 +1032,13 @@ mod tests {
         assert_eq!(decoded.digest, envelope.digest);
 
         headers.remove(&HEADER_IC_AUTH_CONTENT_DIGEST);
+        assert!(
+            SignedEnvelope::from_headers(&headers)
+                .unwrap()
+                .digest
+                .is_none()
+        );
+        headers.insert(&HEADER_IC_AUTH_CONTENT_DIGEST, "%%%".parse().unwrap());
         assert!(SignedEnvelope::from_headers(&headers).is_none());
     }
 
@@ -1007,6 +1086,15 @@ mod tests {
                 signature: vec![13, 14, 15].into(),
             }]),
         };
+
+        let legacy = std::collections::BTreeMap::from([
+            ("public_key", &full.pubkey),
+            ("signature", &full.signature),
+        ]);
+        let data = deterministic_cbor_into_vec(&legacy).unwrap();
+        let decoded: SignedEnvelopeFull = cbor_from_slice(&data).unwrap();
+        assert_eq!(decoded.pubkey, full.pubkey);
+        assert_eq!(decoded.signature, full.signature);
 
         let compact: SignedEnvelope = full.clone().into();
         assert_eq!(compact.pubkey, full.pubkey);
@@ -1260,8 +1348,8 @@ mod tests {
 
         assert!(headers.get(&HEADER_IC_AUTH_CONTENT_DIGEST).is_none());
         assert!(headers.get(&HEADER_IC_AUTH_DELEGATION).is_none());
-        // No digest header means the envelope is no longer reconstructable.
-        assert!(SignedEnvelope::from_headers(&headers).is_none());
+        let decoded = SignedEnvelope::from_headers(&headers).unwrap();
+        assert_eq!(decoded.to_bytes(), bare.to_bytes());
     }
 
     #[test]
@@ -1405,6 +1493,10 @@ mod tests {
         use ic_agent::{Identity, identity::BasicIdentity};
         use ic_certification::{Certificate, fork, labeled, leaf};
         use ic_verify_bls_signature::PrivateKey;
+        use spki::{
+            AlgorithmIdentifierRef, ObjectIdentifier, SubjectPublicKeyInfoRef,
+            der::{Encode, asn1::BitStringRef},
+        };
 
         fn tagged<T: Serialize>(value: &T) -> Vec<u8> {
             let mut bytes = vec![0xd9, 0xd9, 0xf7];
@@ -1416,7 +1508,8 @@ mod tests {
         let expiration = (now_ms + 600_000) * 1_000_000;
         let middle = BasicIdentity::from_raw_key(&[8; 32]);
         let session = BasicIdentity::from_raw_key(&[9; 32]);
-        let canister_key = CanisterSigPublicKey::new(Principal::from_slice(&[1]), vec![7; 32]);
+        // A longer seed gives this SPKI long-form DER lengths.
+        let canister_key = CanisterSigPublicKey::new(Principal::from_slice(&[1]), vec![7; 128]);
         let first = DelegationCompact {
             pubkey: middle.public_key().unwrap().into(),
             expiration,
@@ -1495,7 +1588,16 @@ mod tests {
                 signature: second_signature.into(),
             },
         ];
-        let user_pubkey = canister_key.to_der();
+        let raw_key = canister_key.to_raw();
+        let user_pubkey = SubjectPublicKeyInfoRef {
+            algorithm: AlgorithmIdentifierRef {
+                oid: ObjectIdentifier::new_unwrap("1.3.6.1.4.1.56387.1.2"),
+                parameters: None,
+            },
+            subject_public_key: BitStringRef::from_bytes(&raw_key).unwrap(),
+        }
+        .to_der()
+        .unwrap();
         let session_pubkey = session.public_key().unwrap();
         verify_delegation_chain(
             &user_pubkey,

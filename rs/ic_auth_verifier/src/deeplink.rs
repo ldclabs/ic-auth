@@ -55,9 +55,9 @@ where
 {
     /// Converts the request into a URL with query parameters and fragment.
     ///
-    /// This method creates a URL by appending the request parameters as query parameters
-    /// and the serialized payload (if any) as a URL fragment. The payload is serialized
-    /// to CBOR format and then encoded as base64url.
+    /// The request sets the `os`, `action`, and optional `next_url` query parameters.
+    /// Other endpoint parameters are preserved. The fragment contains the optional
+    /// CBOR payload encoded as Base64URL.
     ///
     /// # Parameters
     ///
@@ -74,6 +74,12 @@ where
         let mut url = endpoint.clone();
         {
             let mut query = url.query_pairs_mut();
+            let reserved = |name: &str| matches!(name, "os" | "action" | "next_url");
+            if endpoint.query_pairs().any(|(name, _)| reserved(&name)) {
+                query
+                    .clear()
+                    .extend_pairs(endpoint.query_pairs().filter(|(name, _)| !reserved(name)));
+            }
             query
                 .append_pair("os", self.os)
                 .append_pair("action", self.action);
@@ -271,6 +277,32 @@ mod tests {
         let url = request.try_to_url(&endpoint).unwrap();
 
         assert_eq!(url.fragment(), None);
+    }
+
+    #[test]
+    fn request_replaces_reserved_query_parameters() {
+        let endpoint =
+            Url::parse("https://auth.example.com/?a=1&os=old&a=2&action=old&next_url=old").unwrap();
+        for callback in [None, Some("https://example.com/callback?from=app")] {
+            let request = DeepLinkRequest::<()> {
+                os: "ios",
+                action: "SignIn",
+                next_url: callback,
+                payload: None,
+            };
+            let url = request.try_to_url(&endpoint).unwrap();
+            let mut expected = vec![("a", "1"), ("a", "2"), ("os", "ios"), ("action", "SignIn")];
+            if let Some(callback) = callback {
+                expected.push(("next_url", callback));
+            }
+            assert!(
+                url.query_pairs()
+                    .eq(expected.into_iter().map(|(k, v)| (k.into(), v.into())))
+            );
+            let response = DeepLinkResponse::from_url(url).unwrap();
+            assert_eq!(response.os, request.os);
+            assert_eq!(response.action, request.action);
+        }
     }
 
     #[test]

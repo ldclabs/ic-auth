@@ -1,131 +1,97 @@
-use axum_core::{
+use axum::{
+    body::Bytes,
     extract::{FromRequest, Request},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use bytes::Bytes;
-use http::{
-    StatusCode,
-    header::{self, HeaderMap, HeaderValue},
-};
-use ic_auth_types::cbor_from_slice;
+use ic_auth_types::{cbor_from_slice, cbor_into_vec};
 use serde::{Serialize, de::DeserializeOwned};
 
-pub static CONTENT_TYPE_CBOR: &str = "application/cbor";
-pub static CONTENT_TYPE_JSON: &str = "application/json";
-pub static CONTENT_TYPE_TEXT: &str = "text/plain";
-
-/// Request or response body with the negotiated wire format.
-///
-/// The extractor accepts `application/json`, `application/cbor`, and structured
-/// syntax suffixes such as `application/problem+json` or
-/// `application/vnd.example+cbor`. Responses preserve the selected format and
-/// fall back to plain text for protocol or serialization errors.
-#[derive(Debug)]
-pub enum Content<T> {
-    /// JSON body and optional response status.
-    Json(T, Option<StatusCode>),
-    /// CBOR body and optional response status.
-    Cbor(T, Option<StatusCode>),
-    /// Plain text body and optional response status.
-    Text(String, Option<StatusCode>),
-    /// Unsupported media type value and optional response status.
-    Other(String, Option<StatusCode>),
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Format {
+    Json,
+    Cbor,
 }
 
-impl Content<()> {
-    /// Picks the response format from `Content-Type` first, then `Accept`.
-    ///
-    /// A request without an `Accept` header accepts any media type (RFC 9110
-    /// 12.5.1) and gets JSON, as does a wildcard range.
-    pub fn from(headers: &HeaderMap) -> Self {
-        if let Some(ct) = Self::from_content_type(headers) {
-            return ct;
+impl Format {
+    fn from_mime(mime: &mime::Mime) -> Option<Self> {
+        if mime.type_() != mime::APPLICATION {
+            return None;
         }
-
-        if !headers.contains_key(header::ACCEPT) {
-            return Content::Json((), None);
-        }
-        // Accept is a list-valued header, including when split over field lines.
-        let values = headers
-            .get_all(header::ACCEPT)
-            .iter()
-            .map(HeaderValue::to_str)
-            .collect::<Result<Vec<_>, _>>();
-        match values {
-            Ok(values) => Self::from_accept(&values.join(",")),
-            Err(_) => Content::Other("unknown".to_string(), None),
+        match mime.suffix().unwrap_or(mime.subtype()).as_str() {
+            "json" => Some(Self::Json),
+            "cbor" => Some(Self::Cbor),
+            _ => None,
         }
     }
 
-    /// Selects only formats this service can produce. Specific ranges override
-    /// wildcards even at q=0; unsupported types never displace a supported one.
-    fn from_accept(accept: &str) -> Self {
-        // Each candidate stores its most specific match and quality.
+    fn from_content_type(headers: &HeaderMap) -> Option<Self> {
+        let mime = headers
+            .get(header::CONTENT_TYPE)?
+            .to_str()
+            .ok()?
+            .parse()
+            .ok()?;
+        Self::from_mime(&mime)
+    }
+
+    /// GET / uses Content-Type first, then the acceptable format with highest quality.
+    pub fn for_response(headers: &HeaderMap) -> Option<Self> {
+        if let Some(format) = Self::from_content_type(headers) {
+            return Some(format);
+        }
+        if !headers.contains_key(header::ACCEPT) {
+            return Some(Self::Json);
+        }
+
+        // A more specific range overrides a wildcard, even at q=0.
         let mut candidates: [Option<(u8, f32)>; 2] = [None, None];
-        for range in accept.split(',') {
-            let Ok(mime) = range.trim().parse::<mime::Mime>() else {
-                continue;
-            };
-            let quality = match mime.get_param("q") {
-                Some(q) => match q.as_str().parse::<f32>() {
-                    Ok(q) if (0.0..=1.0).contains(&q) => q,
-                    _ => continue,
-                },
-                None => 1.0,
-            };
-            for (format, candidate) in ["json", "cbor"].into_iter().zip(&mut candidates) {
-                let specificity = match (mime.type_(), mime.subtype()) {
-                    (mime::STAR, mime::STAR) => 0,
-                    (mime::APPLICATION, mime::STAR) => 1,
-                    (mime::APPLICATION, sub)
-                        if sub == format
-                            || mime.suffix().is_some_and(|suffix| suffix == format) =>
-                    {
-                        2
-                    }
-                    _ => continue,
+        for line in headers.get_all(header::ACCEPT) {
+            for range in line.to_str().ok()?.split(',') {
+                let Ok(mime) = range.trim().parse::<mime::Mime>() else {
+                    continue;
                 };
-                if candidate
-                    .is_none_or(|(s, q)| specificity > s || (specificity == s && quality > q))
+                let quality = match mime.get_param("q") {
+                    Some(q) => match q.as_str().parse::<f32>() {
+                        Ok(q) if (0.0..=1.0).contains(&q) => q,
+                        _ => continue,
+                    },
+                    None => 1.0,
+                };
+                let exact = Self::from_mime(&mime);
+                for (format, candidate) in [Self::Json, Self::Cbor].into_iter().zip(&mut candidates)
                 {
-                    *candidate = Some((specificity, quality));
+                    let specificity = match mime.essence_str() {
+                        "*/*" => 0,
+                        "application/*" => 1,
+                        _ if exact == Some(format) => 2,
+                        _ => continue,
+                    };
+                    if candidate.is_none_or(|previous| (specificity, quality) > previous) {
+                        *candidate = Some((specificity, quality));
+                    }
                 }
             }
         }
         let [json, cbor] = candidates.map(|candidate| candidate.filter(|(_, q)| *q > 0.0));
         match (json, cbor) {
-            (None, None) => Content::Other(accept.to_string(), None),
-            (Some(_), None) => Content::Json((), None),
-            (None, Some(_)) => Content::Cbor((), None),
+            (None, None) => None,
+            (Some(_), None) => Some(Self::Json),
+            (None, Some(_)) => Some(Self::Cbor),
             (Some((js, jq)), Some((cs, cq))) => {
-                // Prefer explicit CBOR on equal quality; plain wildcards keep
-                // the JSON default used by browsers and curl.
-                if cq > jq || (cq == jq && (cs > js || (cs == 2 && js == 2))) {
-                    Content::Cbor((), None)
+                // Explicit CBOR wins a tie. Wildcard ties use the JSON default.
+                if cq > jq || (cq == jq && (cs > js || cs == 2)) {
+                    Some(Self::Cbor)
                 } else {
-                    Content::Json((), None)
+                    Some(Self::Json)
                 }
             }
         }
     }
-
-    /// Parses only the `Content-Type` header.
-    pub fn from_content_type(headers: &HeaderMap) -> Option<Self> {
-        if let Some(content_type) = headers.get(header::CONTENT_TYPE)
-            && let Ok(content_type) = content_type.to_str()
-            && let Ok(mime) = content_type.parse::<mime::Mime>()
-            && mime.type_() == "application"
-        {
-            if mime.subtype() == "cbor" || mime.suffix().is_some_and(|name| name == "cbor") {
-                return Some(Content::Cbor((), None));
-            } else if mime.subtype() == "json" || mime.suffix().is_some_and(|name| name == "json") {
-                return Some(Content::Json((), None));
-            }
-        }
-
-        None
-    }
 }
+
+#[derive(Debug)]
+pub struct Content<T>(pub Format, pub T);
 
 impl<S, T> FromRequest<S> for Content<T>
 where
@@ -134,93 +100,39 @@ where
 {
     type Rejection = Response;
 
-    /// Decodes the body using the request's own `Content-Type`.
-    ///
-    /// `Accept` is deliberately not consulted here: it negotiates the
-    /// *response*, and letting it pick the request parser meant a body sent as
-    /// `text/plain` was parsed as JSON whenever the client happened to accept
-    /// JSON.
     async fn from_request(req: Request, state: &S) -> Result<Self, Self::Rejection> {
-        match Content::from_content_type(req.headers()) {
-            Some(Content::Json(_, _)) => {
-                let body = Bytes::from_request(req, state)
-                    .await
-                    .map_err(IntoResponse::into_response)?;
-                let value: T = serde_json::from_slice(&body).map_err(|err| {
-                    Content::Text::<String>(err.to_string(), Some(StatusCode::BAD_REQUEST))
-                        .into_response()
-                })?;
-                Ok(Self::Json(value, None))
-            }
-            Some(Content::Cbor(_, _)) => {
-                let body = Bytes::from_request(req, state)
-                    .await
-                    .map_err(IntoResponse::into_response)?;
-                let value: T = cbor_from_slice(&body[..]).map_err(|err| {
-                    Content::Text::<String>(err.to_string(), Some(StatusCode::BAD_REQUEST))
-                        .into_response()
-                })?;
-                Ok(Self::Cbor(value, None))
-            }
-            _ => Err(StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response()),
+        let format = Format::from_content_type(req.headers())
+            .ok_or_else(|| StatusCode::UNSUPPORTED_MEDIA_TYPE.into_response())?;
+        let body = Bytes::from_request(req, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        let value = match format {
+            Format::Json => serde_json::from_slice(&body).map_err(|err| err.to_string()),
+            Format::Cbor => cbor_from_slice(&body),
         }
+        .map_err(|err| text_response(StatusCode::BAD_REQUEST, err))?;
+        Ok(Self(format, value))
     }
 }
 
-impl<T> IntoResponse for Content<T>
-where
-    T: Serialize,
-{
+impl<T: Serialize> IntoResponse for Content<T> {
     fn into_response(self) -> Response {
-        match self {
-            Self::Json(v, c) => serialized_response(
-                c.unwrap_or_default(),
-                CONTENT_TYPE_JSON,
-                serde_json::to_vec(&v)
-                    .map(Bytes::from)
-                    .map_err(|err| err.to_string()),
+        let (content_type, body) = match self.0 {
+            Format::Json => (
+                "application/json",
+                serde_json::to_vec(&self.1).map_err(|err| err.to_string()),
             ),
-            Self::Cbor(v, c) => {
-                let body = cbor2::to_vec(&v)
-                    .map(Bytes::from)
-                    .map_err(|err| err.to_string());
-                serialized_response(c.unwrap_or_default(), CONTENT_TYPE_CBOR, body)
-            }
-            Self::Text(v, c) => text_response(c.unwrap_or_default(), v),
-            Self::Other(v, c) => text_response(
-                c.unwrap_or(StatusCode::UNSUPPORTED_MEDIA_TYPE),
-                format!("Unsupported MIME type: {}", v),
-            ),
+            Format::Cbor => ("application/cbor", cbor_into_vec(&self.1)),
+        };
+        match body {
+            Ok(body) => ([(header::CONTENT_TYPE, content_type)], body).into_response(),
+            Err(err) => text_response(StatusCode::INTERNAL_SERVER_ERROR, err),
         }
     }
 }
 
-fn serialized_response(
-    status: StatusCode,
-    content_type: &'static str,
-    body: Result<Bytes, String>,
-) -> Response {
-    match body {
-        Ok(body) => (
-            status,
-            [(header::CONTENT_TYPE, HeaderValue::from_static(content_type))],
-            body,
-        )
-            .into_response(),
-        Err(err) => text_response(StatusCode::INTERNAL_SERVER_ERROR, err),
-    }
-}
-
-fn text_response(status: StatusCode, body: String) -> Response {
-    (
-        status,
-        [(
-            header::CONTENT_TYPE,
-            HeaderValue::from_static(CONTENT_TYPE_TEXT),
-        )],
-        body,
-    )
-        .into_response()
+pub fn text_response(status: StatusCode, body: String) -> Response {
+    (status, [(header::CONTENT_TYPE, "text/plain")], body).into_response()
 }
 
 #[cfg(test)]
@@ -255,28 +167,28 @@ mod tests {
     #[test]
     fn content_from_prefers_content_type_then_accept() {
         let mut headers = HeaderMap::new();
-        headers.insert(header::ACCEPT, CONTENT_TYPE_CBOR.parse().unwrap());
-        headers.insert(header::CONTENT_TYPE, CONTENT_TYPE_JSON.parse().unwrap());
-        assert!(matches!(Content::from(&headers), Content::Json((), None)));
+        headers.insert(header::ACCEPT, "application/cbor".parse().unwrap());
+        headers.insert(header::CONTENT_TYPE, "application/json".parse().unwrap());
+        assert_eq!(Format::for_response(&headers), Some(Format::Json));
 
         headers.insert(
             header::CONTENT_TYPE,
             "application/vnd.example+cbor".parse().unwrap(),
         );
-        assert!(matches!(Content::from(&headers), Content::Cbor((), None)));
+        assert_eq!(Format::for_response(&headers), Some(Format::Cbor));
 
         headers.remove(header::CONTENT_TYPE);
-        assert!(matches!(Content::from(&headers), Content::Cbor((), None)));
+        assert_eq!(Format::for_response(&headers), Some(Format::Cbor));
 
-        headers.insert(header::ACCEPT, CONTENT_TYPE_TEXT.parse().unwrap());
-        assert!(matches!(Content::from(&headers), Content::Other(_, None)));
+        headers.insert(header::ACCEPT, "text/plain".parse().unwrap());
+        assert_eq!(Format::for_response(&headers), None);
 
         headers.insert(header::ACCEPT, "application/xml".parse().unwrap());
-        assert!(matches!(Content::from(&headers), Content::Other(_, None)));
+        assert_eq!(Format::for_response(&headers), None);
 
         // No `Accept` means any media type is acceptable (RFC 9110 12.5.1).
         headers.clear();
-        assert!(matches!(Content::from(&headers), Content::Json((), None)));
+        assert_eq!(Format::for_response(&headers), Some(Format::Json));
     }
 
     #[test]
@@ -284,82 +196,80 @@ mod tests {
         let pick = |accept: &str| {
             let mut headers = HeaderMap::new();
             headers.insert(header::ACCEPT, accept.parse().unwrap());
-            Content::from(&headers)
+            Format::for_response(&headers)
         };
 
         // Wildcards resolve to JSON rather than failing negotiation, so curl
         // (`*/*`) and browsers get a readable body instead of `406`.
-        assert!(matches!(pick("*/*"), Content::Json((), None)));
-        assert!(matches!(pick("application/*"), Content::Json((), None)));
-        assert!(matches!(
+        assert_eq!(pick("*/*"), Some(Format::Json));
+        assert_eq!(pick("application/*"), Some(Format::Json));
+        assert_eq!(
             pick("text/html,application/xhtml+xml,*/*;q=0.8"),
-            Content::Json((), None)
-        ));
+            Some(Format::Json)
+        );
 
         // q-values decide, instead of the order the code happens to check in.
-        assert!(matches!(
+        assert_eq!(
             pick("application/json;q=0.9, application/cbor;q=0.1"),
-            Content::Json((), None)
-        ));
-        assert!(matches!(
+            Some(Format::Json)
+        );
+        assert_eq!(
             pick("application/json;q=0.1, application/cbor;q=0.9"),
-            Content::Cbor((), None)
-        ));
+            Some(Format::Cbor)
+        );
         // `q=0` is a refusal, not a request.
-        assert!(matches!(
+        assert_eq!(
             pick("application/cbor;q=0, application/json"),
-            Content::Json((), None)
-        ));
-        assert!(matches!(
-            pick("application/cbor;q=0"),
-            Content::Other(_, None)
-        ));
+            Some(Format::Json)
+        );
+        assert_eq!(pick("application/cbor;q=0"), None);
 
         // Equal quality keeps the historical CBOR > JSON preference.
-        assert!(matches!(
+        assert_eq!(
             pick("application/json, application/cbor"),
-            Content::Cbor((), None)
-        ));
-        assert!(matches!(pick("text/plain"), Content::Other(_, None)));
+            Some(Format::Cbor)
+        );
+        assert_eq!(pick("text/plain"), None);
 
         // A distinct type that merely contains a supported name is not a match.
-        assert!(matches!(
-            pick("application/cbor-seq"),
-            Content::Other(_, None)
-        ));
-        assert!(matches!(pick("application/xml"), Content::Other(_, None)));
+        assert_eq!(pick("application/cbor-seq"), None);
+        assert_eq!(pick("application/xml"), None);
         // Structured suffixes still work.
-        assert!(matches!(
-            pick("application/vnd.example+cbor"),
-            Content::Cbor((), None)
-        ));
+        assert_eq!(pick("application/vnd.example+cbor"), Some(Format::Cbor));
+        assert_eq!(pick("application/cbor+json"), Some(Format::Json));
+        assert_eq!(pick("application/json+xml"), None);
         // Malformed ranges are skipped rather than aborting negotiation.
-        assert!(matches!(
-            pick("not a mime, application/json"),
-            Content::Json((), None)
-        ));
+        assert_eq!(pick("not a mime, application/json"), Some(Format::Json));
     }
 
     #[test]
     fn content_type_parser_ignores_unsupported_or_invalid_values() {
         let mut headers = HeaderMap::new();
         headers.insert(header::CONTENT_TYPE, "text/json".parse().unwrap());
-        assert!(Content::from_content_type(&headers).is_none());
+        assert!(Format::from_content_type(&headers).is_none());
 
         headers.insert(header::CONTENT_TYPE, "application/xml".parse().unwrap());
-        assert!(Content::from_content_type(&headers).is_none());
+        assert!(Format::from_content_type(&headers).is_none());
 
         headers.insert(
             header::CONTENT_TYPE,
             "application/problem+json".parse().unwrap(),
         );
-        assert!(matches!(
-            Content::from_content_type(&headers),
-            Some(Content::Json((), None))
-        ));
+        assert_eq!(Format::from_content_type(&headers), Some(Format::Json));
+
+        headers.insert(
+            header::CONTENT_TYPE,
+            "application/json+cbor".parse().unwrap(),
+        );
+        assert_eq!(Format::from_content_type(&headers), Some(Format::Cbor));
+        headers.insert(
+            header::CONTENT_TYPE,
+            "application/json+xml".parse().unwrap(),
+        );
+        assert_eq!(Format::from_content_type(&headers), None);
 
         headers.insert(header::CONTENT_TYPE, "not a mime".parse().unwrap());
-        assert!(Content::from_content_type(&headers).is_none());
+        assert!(Format::from_content_type(&headers).is_none());
     }
 
     #[tokio::test]
@@ -369,22 +279,19 @@ mod tests {
         };
         let body = serde_json::to_vec(&payload).unwrap();
         let request = Request::builder()
-            .header(header::CONTENT_TYPE, CONTENT_TYPE_JSON)
+            .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from(body))
             .unwrap();
 
         let parsed = Content::<Payload>::from_request(request, &())
             .await
             .unwrap();
-        assert!(matches!(parsed, Content::Json(_, None)));
-        if let Content::Json(value, None) = parsed {
-            assert_eq!(value, payload);
-        }
+        assert_eq!(parsed.0, Format::Json);
+        assert_eq!(parsed.1, payload);
 
-        let mut body = Vec::new();
-        cbor2::to_writer(&payload, &mut body).unwrap();
+        let body = cbor_into_vec(&payload).unwrap();
         let request = Request::builder()
-            .header(header::CONTENT_TYPE, CONTENT_TYPE_CBOR)
+            .header(header::CONTENT_TYPE, "application/cbor")
             .body(Body::from(body))
             .unwrap();
 
@@ -392,7 +299,7 @@ mod tests {
             .await
             .unwrap()
         {
-            Content::Cbor(value, None) => assert_eq!(value, payload),
+            Content(Format::Cbor, value) => assert_eq!(value, payload),
             other => panic!("unexpected content: {other:?}"),
         }
     }
@@ -400,7 +307,7 @@ mod tests {
     #[tokio::test]
     async fn from_request_rejects_bad_or_unsupported_bodies() {
         let request = Request::builder()
-            .header(header::CONTENT_TYPE, CONTENT_TYPE_JSON)
+            .header(header::CONTENT_TYPE, "application/json")
             .body(Body::from("{"))
             .unwrap();
         let response = Content::<Payload>::from_request(request, &())
@@ -409,7 +316,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
 
         let request = Request::builder()
-            .header(header::CONTENT_TYPE, CONTENT_TYPE_CBOR)
+            .header(header::CONTENT_TYPE, "application/cbor")
             .body(Body::from(vec![0xff]))
             .unwrap();
         let response = Content::<Payload>::from_request(request, &())
@@ -426,8 +333,8 @@ mod tests {
         // `Accept` describes the response and must not choose the request
         // parser: a `text/plain` body is rejected even when JSON is accepted.
         let request = Request::builder()
-            .header(header::CONTENT_TYPE, CONTENT_TYPE_TEXT)
-            .header(header::ACCEPT, CONTENT_TYPE_JSON)
+            .header(header::CONTENT_TYPE, "text/plain")
+            .header(header::ACCEPT, "application/json")
             .body(Body::from(r#"{"value":"hello"}"#))
             .unwrap();
         let response = Content::<Payload>::from_request(request, &())
@@ -437,121 +344,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn into_response_sets_status_headers_and_body() {
-        let payload = Payload {
-            value: "hello".to_string(),
-        };
-
-        let (status, headers, body) =
-            response_parts(Content::Json(&payload, Some(StatusCode::CREATED)).into_response())
-                .await;
-        assert_eq!(status, StatusCode::CREATED);
-        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_JSON);
-        assert_eq!(body, Bytes::from_static(br#"{"value":"hello"}"#));
-
-        let (status, headers, body) =
-            response_parts(Content::Cbor(&payload, Some(StatusCode::ACCEPTED)).into_response())
-                .await;
-        assert_eq!(status, StatusCode::ACCEPTED);
-        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_CBOR);
-        let decoded: Payload = cbor_from_slice(body.as_ref()).unwrap();
-        assert_eq!(decoded, payload);
-
-        let (status, headers, body) = response_parts(
-            Content::<Payload>::Text("plain".to_string(), Some(StatusCode::IM_A_TEAPOT))
-                .into_response(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::IM_A_TEAPOT);
-        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
-        assert_eq!(body, Bytes::from_static(b"plain"));
-
-        let (status, headers, body) = response_parts(
-            Content::<Payload>::Other("image/png".to_string(), None).into_response(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
-        assert_eq!(
-            body,
-            Bytes::from_static(b"Unsupported MIME type: image/png")
-        );
-    }
-
-    #[tokio::test]
     async fn into_response_reports_serialization_errors() {
-        let (status, headers, body) =
-            response_parts(Content::Json(FailingSerialize, None).into_response()).await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
-        assert_eq!(body, Bytes::from_static(b"intentional serialize failure"));
-
-        let (status, headers, body) =
-            response_parts(Content::Cbor(FailingSerialize, None).into_response()).await;
-        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
-        assert!(
-            std::str::from_utf8(&body)
-                .unwrap()
-                .contains("intentional serialize failure")
-        );
-    }
-
-    #[tokio::test]
-    async fn into_response_covers_owned_payload_and_marker_variants() {
-        let payload = Payload {
-            value: "owned".to_string(),
-        };
-
-        let (status, headers, body) =
-            response_parts(Content::Json(payload, None).into_response()).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_JSON);
-        assert_eq!(body, Bytes::from_static(br#"{"value":"owned"}"#));
-
-        let payload = Payload {
-            value: "owned".to_string(),
-        };
-        let (status, headers, body) =
-            response_parts(Content::Cbor(payload, None).into_response()).await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_CBOR);
-        let decoded: Payload = cbor_from_slice(body.as_ref()).unwrap();
-        assert_eq!(
-            decoded,
-            Payload {
-                value: "owned".to_string(),
-            }
-        );
-
-        let (status, headers, body) = response_parts(
-            Content::<FailingSerialize>::Text("fallback".to_string(), None).into_response(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
-        assert_eq!(body, Bytes::from_static(b"fallback"));
-
-        let (status, headers, body) = response_parts(
-            Content::<FailingSerialize>::Other("application/octet-stream".to_string(), None)
-                .into_response(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
-        assert_eq!(
-            body,
-            Bytes::from_static(b"Unsupported MIME type: application/octet-stream")
-        );
-
-        let (status, headers, body) =
-            response_parts(Content::<String>::Other("video/mp4".to_string(), None).into_response())
-                .await;
-        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-        assert_eq!(headers[header::CONTENT_TYPE], CONTENT_TYPE_TEXT);
-        assert_eq!(
-            body,
-            Bytes::from_static(b"Unsupported MIME type: video/mp4")
-        );
+        for format in [Format::Json, Format::Cbor] {
+            let (status, headers, body) =
+                response_parts(Content(format, FailingSerialize).into_response()).await;
+            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+            assert_eq!(headers[header::CONTENT_TYPE], "text/plain");
+            assert!(
+                std::str::from_utf8(&body)
+                    .unwrap()
+                    .contains("intentional serialize failure")
+            );
+        }
     }
 }

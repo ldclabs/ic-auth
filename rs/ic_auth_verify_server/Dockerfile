@@ -9,13 +9,14 @@ FROM rust:1-alpine AS build
 RUN apk add --no-cache musl-dev
 WORKDIR /build
 # Workspace manifests first, then the crates they reference.
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock LICENSE ./
 COPY rs ./rs
 # --locked: a Cargo.toml/Cargo.lock skew must fail the build, not silently
 # re-resolve deps, so the image stays reproducible from the commit.
 RUN cargo build --release --locked -p ic_auth_verify_server
 
 FROM scratch
+COPY --from=build /build/LICENSE /LICENSE
 COPY --from=build /build/target/release/ic_auth_verify_server /ic_auth_verify_server
 # The binary defaults to 127.0.0.1, which is unreachable from outside the
 # container; bind all interfaces so `docker run -p 8080:8080` just works.

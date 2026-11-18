@@ -1,7 +1,7 @@
 //! A small cache of signatures that have already been verified.
 //!
-//! Every canister signature carries a subnet delegation certificate, and that
-//! certificate is stable for long stretches: the same public key, signature and
+//! Canister signatures from delegated subnets carry a delegation certificate
+//! that is stable for long stretches. The same public key, signature and
 //! message are re-verified on request after request. A BLS verification is by
 //! far the most expensive step of [`verify_certificate`](crate::verify_certificate),
 //! and inside a canister it is paid for in cycles, so remembering the
@@ -101,12 +101,12 @@ impl SignatureCache {
         if !inner.entries.insert(entry) {
             return;
         }
-        inner.order.push_back(entry);
-        while inner.order.len() > self.capacity {
-            if let Some(evicted) = inner.order.pop_front() {
-                inner.entries.remove(&evicted);
-            }
+        if inner.order.len() == self.capacity
+            && let Some(evicted) = inner.order.pop_front()
+        {
+            inner.entries.remove(&evicted);
         }
+        inner.order.push_back(entry);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -155,12 +155,14 @@ mod tests {
     #[test]
     fn the_cache_evicts_instead_of_growing_without_bound() {
         let cache = SignatureCache::default();
+        let queue_capacity = cache.lock().order.capacity();
         let first = key(b"pk", b"sig", &0u32.to_be_bytes());
         for i in 0..=SignatureCache::DEFAULT_CAPACITY {
             cache.insert(key(b"pk", b"sig", &(i as u32).to_be_bytes()));
         }
 
         let inner = cache.lock();
+        assert_eq!(inner.order.capacity(), queue_capacity);
         assert_eq!(inner.order.len(), SignatureCache::DEFAULT_CAPACITY);
         assert_eq!(inner.entries.len(), SignatureCache::DEFAULT_CAPACITY);
         // The oldest entry is the one that made room.

@@ -21,7 +21,7 @@ Rust dependency examples use the workspace's `0.10` release line. The TypeScript
 - **TypeScript client:** sign a value or digest with `@ldclabs/ic-auth` and send the envelope to your backend.
 - **Rust backend:** enable `ic_auth_verifier/envelope` to verify envelopes; enable `identity` to sign them too.
 - **IC canister:** use `ic_auth_types` and `ic_auth_verifier` with `envelope`. Supply the IC time explicitly; leave the native `identity` and upstream `xid` features disabled.
-- **HTTP verification:** run `ic_auth_verify_server` and call `POST /verify` with a JSON or CBOR body.
+- **HTTP verification:** run `ic_auth_verify_server` and call `POST /verify` with a JSON or CBOR body. Successful responses include the principal and effective delegation permissions. For writes, require `permissions === 'all'` alongside application authorization.
 - **Cloudflare:** deploy `ts/ic-auth-worker` to run the same verifier in Containers, with regional routing and Worker service bindings.
 
 ```toml

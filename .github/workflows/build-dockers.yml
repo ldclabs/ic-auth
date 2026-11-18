@@ -6,22 +6,23 @@ on:
         description: "Docker image tag"
         required: true
         type: string
-  # push:
-  #   tags:
-  #     - 'v*'
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ldclabs/ic_auth_verify_server
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v7
-      - uses: Swatinem/rust-cache@v2
       - name: Build the Docker image
+        env:
+          BUILD_TAG: ${{ inputs.build_tag }}
+          REGISTRY_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          docker login --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} ${{ env.REGISTRY }}
-          IMAGE_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}_amd64:${{ inputs.build_tag }}"
-          LATEST_TAG="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}_amd64:latest"
-          TAGS="-t ${IMAGE_TAG} -t ${LATEST_TAG}"
-          docker build -f rs/ic_auth_verify_server/Dockerfile $TAGS --push .
+          printf '%s' "$REGISTRY_TOKEN" | docker login --username "$GITHUB_ACTOR" --password-stdin "$REGISTRY"
+          image="$REGISTRY/${IMAGE_NAME}_amd64"
+          docker build -f rs/ic_auth_verify_server/Dockerfile \
+            --tag "$image:$BUILD_TAG" --tag "$image:latest" --push .

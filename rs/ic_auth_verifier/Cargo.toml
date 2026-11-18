@@ -10,7 +10,7 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-ic_auth_types = { path = "../ic_auth_types", version = "0.10", optional = true }
+ic_auth_types = { path = "../ic_auth_types", version = "0.10.6", optional = true }
 candid = { workspace = true, optional = true }
 serde = { workspace = true }
 serde_bytes = { workspace = true, optional = true }
@@ -20,7 +20,7 @@ sha3 = { workspace = true }
 k256 = { workspace = true }
 p256 = { workspace = true }
 ed25519-dalek = { workspace = true }
-simple_asn1 = { workspace = true }
+spki = { workspace = true }
 ic-canister-sig-creation = { workspace = true }
 ic-representation-independent-hash = { workspace = true, optional = true }
 ic-certification = { workspace = true, optional = true }

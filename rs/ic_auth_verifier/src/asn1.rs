@@ -1,7 +1,11 @@
-/// Lite version of `ic-crypto-standalone-sig-verifier`
-/// Original source: https://github.com/dfinity/ic/blob/master/rs/crypto/standalone-sig-verifier/src/sign_utils.rs
 use serde::{Deserialize, Serialize};
-use simple_asn1::{ASN1Block, OID, from_der, oid};
+use spki::{ObjectIdentifier, SubjectPublicKeyInfoRef, der::Decode};
+
+const IC_CANISTER: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.6.1.4.1.56387.1.2");
+const ED25519: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.101.112");
+const EC_PUBLIC_KEY: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.2.1");
+const SECP256K1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.3.132.0.10");
+const SECP256R1: ObjectIdentifier = ObjectIdentifier::new_unwrap("1.2.840.10045.3.1.7");
 
 /// Public-key algorithms recognized in IC identity DER public keys.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
@@ -19,151 +23,37 @@ pub enum Algorithm {
 
 /// Parses a DER SubjectPublicKeyInfo public key.
 ///
-/// Returns the recognized algorithm and the raw public key bytes that should be
-/// passed to the matching verifier. IC canister signatures keep the DER public
-/// key for certificate-path verification; basic signatures use the extracted
-/// curve/key bytes.
+/// For basic signatures, pass the returned raw bytes to [`crate::verify_basic_sig`].
+/// The public canister signature verifier accepts the original DER key.
 pub fn user_public_key_from_der(data: &[u8]) -> Result<(Algorithm, Vec<u8>), String> {
-    let mut parts = from_der(data).map_err(|err| format!("Error in DER encoding: {err}"))?;
-    if parts.len() != 1 {
-        return Err("Expected exactly one ASN.1 block".to_string());
-    }
-    let mut key_seq = if let ASN1Block::Sequence(_offset, part) = parts.remove(0) {
-        part
-    } else {
-        return Err("Expected an ASN.1 sequence".to_string());
+    let (algorithm, key) = parse_public_key(data)?;
+    Ok((algorithm, key.to_vec()))
+}
+
+pub(crate) fn parse_public_key(data: &[u8]) -> Result<(Algorithm, &[u8]), String> {
+    let spki = SubjectPublicKeyInfoRef::from_der(data)
+        .map_err(|err| format!("Error in DER encoding: {err}"))?;
+    let identifier = spki.algorithm;
+    let algorithm = match (identifier.oid, identifier.parameters) {
+        (IC_CANISTER, None) => Algorithm::IcCanisterSignature,
+        (ED25519, None) => Algorithm::Ed25519,
+        (EC_PUBLIC_KEY, Some(curve)) => match curve.decode_as::<ObjectIdentifier>() {
+            Ok(SECP256K1) => Algorithm::EcdsaSecp256k1,
+            Ok(SECP256R1) => Algorithm::EcdsaP256,
+            _ => return Err("Unsupported EC curve".into()),
+        },
+        _ => return Err(format!("Unsupported algorithm: {}", identifier.oid)),
     };
-
-    if key_seq.len() != 2 {
-        return Err("Expected exactly two ASN.1 blocks".to_string());
-    }
-
-    let pk_bytes = public_key_bytes(key_seq.pop().unwrap())?;
-    let algo_id = algorithm_identifier(key_seq.pop().unwrap())?;
-    if algo_id == PkixAlgorithmIdentifier::iccsa() {
-        return Ok((Algorithm::IcCanisterSignature, pk_bytes));
-    } else if algo_id == PkixAlgorithmIdentifier::ed25519() {
-        return Ok((Algorithm::Ed25519, pk_bytes));
-    } else if algo_id == PkixAlgorithmIdentifier::ecdsa_secp256k1() {
-        return Ok((Algorithm::EcdsaSecp256k1, pk_bytes));
-    } else if algo_id == PkixAlgorithmIdentifier::ecdsa_secp256r1() {
-        return Ok((Algorithm::EcdsaP256, pk_bytes));
-    }
-
-    Err(format!("Unsupported algorithm: {algo_id:?}"))
-}
-
-/// An AlgorithmIdentifier as described in RFC 5480
-#[derive(Clone, Eq, PartialEq, Debug)]
-struct PkixAlgorithmIdentifier {
-    pub oid: OID,
-    pub params: Option<PkixAlgorithmParameters>,
-}
-
-impl PkixAlgorithmIdentifier {
-    fn iccsa() -> Self {
-        Self {
-            oid: oid!(1, 3, 6, 1, 4, 1, 56387, 1, 2),
-            params: None,
-        }
-    }
-
-    fn ed25519() -> Self {
-        Self {
-            oid: oid!(1, 3, 101, 112),
-            params: None,
-        }
-    }
-
-    fn ecdsa_secp256k1() -> Self {
-        Self {
-            oid: oid!(1, 2, 840, 10045, 2, 1),
-            params: Some(PkixAlgorithmParameters::ObjectIdentifier(oid!(
-                1, 3, 132, 0, 10
-            ))),
-        }
-    }
-
-    fn ecdsa_secp256r1() -> Self {
-        Self {
-            oid: oid!(1, 2, 840, 10045, 2, 1),
-            params: Some(PkixAlgorithmParameters::ObjectIdentifier(oid!(
-                1, 2, 840, 10045, 3, 1, 7
-            ))),
-        }
-    }
-}
-
-/// The parameters of an AlgorithmIdentifier as described in RFC 5480
-///
-/// This enum can be extended to support alternate types as required
-/// when different algorithms are implemented
-#[derive(Clone, Eq, PartialEq, Debug)]
-enum PkixAlgorithmParameters {
-    /// An ASN.1 object identifier
-    ObjectIdentifier(OID),
-    /// An ASN.1 explicit NULL
-    Null,
-}
-
-/// Retrieves PkixAlgorithmIdentifier from the given ASN1Block.
-fn algorithm_identifier(oid_seq: ASN1Block) -> Result<PkixAlgorithmIdentifier, String> {
-    // PkixAlgorithmIdentifier is a pair of an OID plus anything (or nothing)
-    // whose type depends on the leading OID. However in our current usage
-    // the second parameter is always either absent or a second OID
-    if let ASN1Block::Sequence(_offset_oid, oid_parts) = oid_seq {
-        if oid_parts.len() == 1 || oid_parts.len() == 2 {
-            let algo_oid = oid_parts
-                .first()
-                .expect("Missing OID from algorithm identifier");
-            let algo_params = oid_parts.get(1);
-
-            match (algo_oid, algo_params) {
-                (ASN1Block::ObjectIdentifier(_, algo_oid), Some(ASN1Block::Null(_))) => {
-                    Ok(PkixAlgorithmIdentifier {
-                        oid: algo_oid.clone(),
-                        params: Some(PkixAlgorithmParameters::Null),
-                    })
-                }
-                (
-                    ASN1Block::ObjectIdentifier(_, algo_oid),
-                    Some(ASN1Block::ObjectIdentifier(_, algo_params)),
-                ) => Ok(PkixAlgorithmIdentifier {
-                    oid: algo_oid.clone(),
-                    params: Some(PkixAlgorithmParameters::ObjectIdentifier(
-                        algo_params.clone(),
-                    )),
-                }),
-                (ASN1Block::ObjectIdentifier(_, algo_oid), None) => Ok(PkixAlgorithmIdentifier {
-                    oid: algo_oid.clone(),
-                    params: None,
-                }),
-                (_, _) => Err("Algorithm identifier has unexpected type".to_string()),
-            }
-        } else {
-            Err("Algorithm identifier has unexpected size".to_string())
-        }
-    } else {
-        Err("Expected algorithm identifier".to_string())
-    }
-}
-
-/// Retrieves raw public key bytes from the given ASN1Block.
-fn public_key_bytes(key_part: ASN1Block) -> Result<Vec<u8>, String> {
-    if let ASN1Block::BitString(_offset, bits_count, key_bytes) = key_part {
-        if bits_count != key_bytes.len() * 8 {
-            return Err("Inconsistent key length".to_string());
-        }
-        Ok(key_bytes)
-    } else {
-        Err(format!("Expected BitString, got {key_part:?}"))
-    }
+    let key = spki
+        .subject_public_key
+        .as_bytes()
+        .ok_or("Inconsistent key length")?;
+    Ok((algorithm, key))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use simple_asn1::{BigInt, to_der};
 
     #[test]
     fn test_user_public_key_from_der() {
@@ -182,99 +72,50 @@ mod tests {
 
     #[test]
     fn test_user_public_key_from_der_rejects_malformed_data() {
-        assert!(
-            user_public_key_from_der(&[0xff])
-                .unwrap_err()
-                .contains("DER encoding")
-        );
-
-        let integer = hex::decode("020100").unwrap();
-        assert_eq!(
-            user_public_key_from_der(&integer).unwrap_err(),
-            "Expected an ASN.1 sequence"
-        );
-
-        let two_top_level_blocks = hex::decode("020100020101").unwrap();
-        assert_eq!(
-            user_public_key_from_der(&two_top_level_blocks).unwrap_err(),
-            "Expected exactly one ASN.1 block"
-        );
-
-        let empty_sequence = hex::decode("3000").unwrap();
-        let err = user_public_key_from_der(&empty_sequence).unwrap_err();
-        assert!(err.contains("DER encoding") || err == "Expected exactly two ASN.1 blocks");
-
-        let short_sequence = to_der(&ASN1Block::Sequence(
-            0,
-            vec![ASN1Block::Integer(0, BigInt::from(0))],
-        ))
-        .unwrap();
-        assert_eq!(
-            user_public_key_from_der(&short_sequence).unwrap_err(),
-            "Expected exactly two ASN.1 blocks"
-        );
-
-        let seq_with_integer_algorithm = hex::decode("3006020100030100").unwrap();
-        assert_eq!(
-            user_public_key_from_der(&seq_with_integer_algorithm).unwrap_err(),
-            "Expected algorithm identifier"
-        );
-
-        let valid_key = ASN1Block::BitString(0, 8, vec![1]);
-        let unexpected_algorithm_type = to_der(&ASN1Block::Sequence(
-            0,
-            vec![
-                ASN1Block::Sequence(0, vec![ASN1Block::Integer(0, BigInt::from(0))]),
-                valid_key.clone(),
-            ],
-        ))
-        .unwrap();
-        assert_eq!(
-            user_public_key_from_der(&unexpected_algorithm_type).unwrap_err(),
-            "Algorithm identifier has unexpected type"
-        );
-
-        let unexpected_algorithm_size = to_der(&ASN1Block::Sequence(
-            0,
-            vec![
-                ASN1Block::Sequence(
-                    0,
-                    vec![
-                        ASN1Block::ObjectIdentifier(0, oid!(1, 3, 101, 112)),
-                        ASN1Block::Null(0),
-                        ASN1Block::Null(0),
-                    ],
-                ),
-                valid_key,
-            ],
-        ))
-        .unwrap();
-        assert_eq!(
-            user_public_key_from_der(&unexpected_algorithm_size).unwrap_err(),
-            "Algorithm identifier has unexpected size"
-        );
-
-        assert!(
-            public_key_bytes(ASN1Block::Null(0))
-                .unwrap_err()
-                .contains("Expected BitString")
-        );
+        for (case, encoded) in [
+            ("truncated DER", "ff"),
+            ("top-level integer", "020100"),
+            ("two top-level items", "020100020101"),
+            ("empty sequence", "3000"),
+            ("missing key", "3003020100"),
+            ("missing algorithm sequence", "3006020100030100"),
+            ("integer algorithm identifier", "30083003020100030100"),
+            (
+                "extra algorithm parameter",
+                "300e300906032b657005000500030100",
+            ),
+            ("key is not a bit string", "3009300506032b65700500"),
+            ("trailing data", "300a300506032b657003010000"),
+        ] {
+            assert!(
+                user_public_key_from_der(&hex::decode(encoded).unwrap()).is_err(),
+                "{case}"
+            );
+        }
     }
 
     #[test]
     fn test_user_public_key_from_der_rejects_unsupported_algorithm() {
-        let rsa_subject_public_key_info = hex::decode("300e300906052b0e03021a0500030100").unwrap();
+        let unsupported_key_info = hex::decode("300e300906052b0e03021a0500030100").unwrap();
         assert!(
-            user_public_key_from_der(&rsa_subject_public_key_info)
+            user_public_key_from_der(&unsupported_key_info)
                 .unwrap_err()
                 .contains("Unsupported algorithm")
         );
     }
 
     #[test]
-    fn test_public_key_bytes_rejects_inconsistent_bit_length() {
+    fn algorithms_require_matching_parameters_and_byte_aligned_keys() {
+        // Ed25519 with explicit NULL and EC without a named curve are unsupported.
+        for encoded in [
+            "300c300706032b65700500030100",
+            "300e300906072a8648ce3d0201030100",
+        ] {
+            assert!(user_public_key_from_der(&hex::decode(encoded).unwrap()).is_err());
+        }
+        let unaligned = hex::decode("300b300506032b657003020100").unwrap();
         assert_eq!(
-            public_key_bytes(ASN1Block::BitString(0, 7, vec![0])).unwrap_err(),
+            user_public_key_from_der(&unaligned).unwrap_err(),
             "Inconsistent key length"
         );
     }

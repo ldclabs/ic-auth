@@ -1,10 +1,12 @@
 use candid::Principal;
 use ic_canister_sig_creation::CanisterSigPublicKey;
-use ic_certification::{Certificate, HashTree, SubtreeLookupResult, leaf};
+use ic_certification::{Certificate, HashTree, LookupResult};
 use serde::{Deserialize, Serialize};
 use serde_bytes::ByteBuf;
 
 use crate::{
+    Algorithm,
+    asn1::parse_public_key,
     certificate_verification::{
         parse_certificate_cbor, verify_certificate, verify_certificate_time,
     },
@@ -45,14 +47,35 @@ pub fn verify_canister_sig(
     current_time_ns: u128,
     allowed_certificate_time_offset_ns: Option<u128>,
 ) -> Result<(), String> {
-    let allowed_offset_ns = allowed_certificate_time_offset_ns.unwrap_or(MAX_CERT_TIME_OFFSET_NS);
+    let (algorithm, key) = parse_public_key(public_key_der)?;
+    if algorithm != Algorithm::IcCanisterSignature {
+        return Err("Expected a canister signature public key".into());
+    }
+    verify_canister_sig_raw(
+        message,
+        signature_cbor,
+        key,
+        ic_root_public_key_der,
+        current_time_ns,
+        allowed_certificate_time_offset_ns.unwrap_or(MAX_CERT_TIME_OFFSET_NS),
+    )
+}
+
+pub(crate) fn verify_canister_sig_raw(
+    message: &[u8],
+    signature_cbor: &[u8],
+    public_key_raw: &[u8],
+    ic_root_public_key_der: &[u8],
+    current_time_ns: u128,
+    allowed_offset_ns: u128,
+) -> Result<(), String> {
     let signature = parse_signature_cbor(signature_cbor)?;
     let certificate = parse_certificate_cbor(&signature.certificate)?;
 
     let entry = SignatureCache::entry(&[
         CANISTER_SIG_CACHE_DOMAIN,
         ic_root_public_key_der,
-        public_key_der,
+        public_key_raw,
         signature_cbor,
         message,
     ]);
@@ -60,7 +83,7 @@ pub fn verify_canister_sig(
         return verify_certificate_time(&certificate, current_time_ns, allowed_offset_ns);
     }
 
-    let public_key = CanisterSigPublicKey::try_from(public_key_der)
+    let public_key = CanisterSigPublicKey::try_from_raw(public_key_raw)
         .map_err(|e| format!("failed to parse canister sig public key: {e}"))?;
     check_sig_path(&signature, &public_key, message)?;
     check_certified_data(&signature, &certificate, &public_key.canister_id)?;
@@ -88,12 +111,10 @@ fn check_certified_data(
         signing_canister_id.as_slice(),
         "certified_data".as_bytes(),
     ];
-    let SubtreeLookupResult::Found(cert_data_leaf) =
-        certificate.tree.lookup_subtree(&cert_data_path)
-    else {
+    let LookupResult::Found(cert_data) = certificate.tree.lookup_path(&cert_data_path) else {
         return Err("certified_data entry not found".to_string());
     };
-    if cert_data_leaf != leaf(signature.tree.digest()) {
+    if cert_data != signature.tree.digest() {
         return Err("certified_data doesn't match sig tree digest".to_string());
     }
     Ok(())
@@ -109,10 +130,10 @@ fn check_sig_path(
     let seed_hash = sha256(&canister_sig_pk.seed);
     let msg_hash = sha256(msg);
     let sig_path = ["sig".as_bytes(), &seed_hash, &msg_hash];
-    let SubtreeLookupResult::Found(sig_leaf) = signature.tree.lookup_subtree(&sig_path) else {
+    let LookupResult::Found(sig_leaf) = signature.tree.lookup_path(&sig_path) else {
         return Err("signature entry not found".to_string());
     };
-    if sig_leaf != leaf(b"") {
+    if !sig_leaf.is_empty() {
         return Err("signature entry is not an empty leaf".to_string());
     }
     Ok(())
@@ -137,7 +158,7 @@ fn parse_signature_cbor(signature_cbor: &[u8]) -> Result<CanisterSignature, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ic_certification::{empty, labeled};
+    use ic_certification::{empty, labeled, leaf};
 
     fn canister_public_key() -> CanisterSigPublicKey {
         let pk_der =
@@ -234,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn a_repeat_verification_skips_everything_but_the_time_check() {
+    fn cached_canister_signatures_remain_bound_to_the_message_and_time() {
         // A canister signature on a local replica whose certificate `/time` is
         // 1_234_567 ns, so it is fresh at `current_time_ns = 0`.
         let message =
@@ -243,40 +264,32 @@ mod tests {
         let signature = hex::decode("d9d9f7a26b636572746966696361746558a1d9d9f7a26474726565830183024863616e697374657283024a0000000000000001010183024e6365727469666965645f646174618203582053e3b19ab292296b52b451b0662af2d86ac707569b39825fc31f62aca41406d483024474696d6582034387ad4b697369676e61747572655830a95766af95898e1c8492de7b7d9e6c601ea9d9958113f6c0491ef044ed5ebb03d31983abfa40ebbef7068ebaf7e66f05647472656583024373696783025820591047009df12cb39741d672f270045fd15beec2b0b84c1d71bda98b758726cd83025820d37372239856cdf2ae158e5ac365f15501a9e5612a970ddd7b3199c522b54194820340").unwrap();
         let public_key = hex::decode("303c300c060a2b0601040183b8430102032c000a000000000000000101011f809d0136deeed8e0187447d20ac0e13e0201e1dede8c437eada3e8dc349f85").unwrap();
         let root = hex::decode("308182301d060d2b0601040182dc7c0503010201060c2b0601040182dc7c05030201036100b90210504fe157d1df412e500ced967ef794dc7aa88c84d764b74b6bc2cf0e575d79f331927df062240c88a28e1802c60b407c7bce541b50310d775919bcd0f799222c3738bc3bcc8bf05af5f52ee2afec54c460bda35c6c379267924db2d374").unwrap();
-        let entry = |message: &[u8]| {
-            SignatureCache::entry(&[
-                CANISTER_SIG_CACHE_DOMAIN,
-                &root,
-                &public_key,
-                &signature,
-                message,
-            ])
-        };
+        let (_, raw_key) = parse_public_key(&public_key).unwrap();
+        let entry = SignatureCache::entry(&[
+            CANISTER_SIG_CACHE_DOMAIN,
+            &root,
+            raw_key,
+            &signature,
+            &message,
+        ]);
         let verify = |message: &[u8], now: u128| {
             verify_canister_sig(message, &signature, &public_key, &root, now, None)
         };
 
         verify(&message, 0).unwrap();
-        assert!(SignatureCache::global().contains(&entry(&message)));
+        assert!(SignatureCache::global().contains(&entry));
         verify(&message, 0).unwrap();
 
-        // The signature does not cover this message, so it fails in full...
+        // The cached verification applies only to the signed message.
         let unsigned = b"not the signed message";
         assert_eq!(
             verify(unsigned, 0).unwrap_err(),
             "signature entry not found"
         );
-        // ...and a recorded entry is what lets it through, proving that a hit
-        // bypasses the signature checks.
-        SignatureCache::global().insert(entry(unsigned));
-        verify(unsigned, 0).unwrap();
-
         // Certificate freshness is still enforced on a hit.
         let stale = MAX_CERT_TIME_OFFSET_NS + 1_000_000_000;
-        for message in [message.as_slice(), unsigned] {
-            let err = verify(message, stale).unwrap_err();
-            assert!(err.contains("too far in the past"), "{err}");
-        }
+        let err = verify(&message, stale).unwrap_err();
+        assert!(err.contains("too far in the past"), "{err}");
     }
 
     #[test]

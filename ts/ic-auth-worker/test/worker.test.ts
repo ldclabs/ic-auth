@@ -2,9 +2,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // The Workers-only Container base class is exercised by Wrangler. Mock it here
 // so these tests can check our forwarding contract without Docker or an account.
-vi.mock('@cloudflare/containers', () => ({ Container: class {} }))
+vi.mock('@cloudflare/containers', () => ({
+	Container: class {
+		constructor(
+			_ctx: unknown,
+			readonly env: Env
+		) {}
+	}
+}))
 
-import worker from '../src/index.js'
+import worker, { AuthContainer } from '../src/index.js'
 
 function binding(response: Response) {
 	const id = {} as DurableObjectId
@@ -27,6 +34,18 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks())
 
 describe('Worker forwarding', () => {
+	it('passes the deployment certificate window to the container when configured', () => {
+		const { env } = binding(new Response())
+		const ctx = {} as ConstructorParameters<typeof AuthContainer>[0]
+		expect(new AuthContainer(ctx, env).envVars).toEqual({
+			SOCKET_ADDR: '0.0.0.0:8080'
+		})
+		expect(
+			new AuthContainer(ctx, { ...env, MAX_CERT_TIME_OFFSET_SECS: '300' })
+				.envVars
+		).toEqual({ SOCKET_ADDR: '0.0.0.0:8080', MAX_CERT_TIME_OFFSET_SECS: '300' })
+	})
+
 	it('forwards the original request and returns the verifier response unchanged', async () => {
 		const upstream = Response.json({ user: 'verified-principal' })
 		const { env, id, ns, containerFetch } = binding(upstream)

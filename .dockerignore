@@ -2,6 +2,7 @@
 **
 !Cargo.toml
 !Cargo.lock
+!LICENSE
 !rs/
 !rs/**
 rs/**/target/

@@ -21,6 +21,19 @@ function fixture(name: string): string {
 }
 
 describe('Rust interoperability', () => {
+  it('sorts floating-point map keys by the bytes Rust signs', () => {
+    const entries: [number, string][] = [
+      [0.9, 'a'],
+      [1.5, 'b']
+    ]
+    for (const order of [entries, entries.toReversed()]) {
+      assert.equal(
+        bytesToHex(deterministicEncode(new Map(order))),
+        fixture('float-map')
+      )
+    }
+  })
+
   it('matches fixed CBOR bytes and SHA3 digest regardless of insertion order', () => {
     const forward = { amount: 1.5, challenge: 'login' }
     const reversed = { challenge: 'login', amount: 1.5 }

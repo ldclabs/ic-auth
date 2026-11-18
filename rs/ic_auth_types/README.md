@@ -69,7 +69,7 @@ The public key above is illustrative data for serialization, not a signing key.
 - `ByteArrayB64<N>`: owned bytes with a fixed length checked during decoding.
 - `BytesB64`: copy-on-write bytes, constructed from a borrowed slice or an owned vector.
 
-Human-readable Serde formats emit padded Base64URL with a `b64:` prefix. Decoding accepts the prefix optionally, both standard and URL-safe alphabets, and padded or unpadded values. CBOR uses byte strings; Candid uses `vec nat8` (`blob`). The crate also re-exports `serde_bytes::{ByteArray, ByteBuf, Bytes}`.
+Human-readable Serde formats emit padded Base64URL with a `b64:` prefix. Decoding accepts the optional prefix, both standard and URL-safe alphabets, and padded or unpadded values. For compatibility, Rust also accepts a single `=` where two would normally appear. CBOR uses byte strings and Candid uses `vec nat8` (`blob`). The crate also re-exports `serde_bytes::{ByteArray, ByteBuf, Bytes}`.
 
 ```rust
 use ic_auth_types::ByteBufB64;
@@ -175,4 +175,4 @@ Install the WASM target with `rustup target add wasm32-unknown-unknown` if neede
 
 Copyright © 2024-2026 [LDC Labs](https://github.com/ldclabs).
 
-Licensed under the MIT License. See [LICENSE](../../LICENSE).
+Licensed under the MIT License. See [LICENSE](LICENSE).

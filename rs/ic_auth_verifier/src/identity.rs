@@ -1,7 +1,7 @@
 use arc_swap::ArcSwap;
 use candid::Principal;
 use ic_agent::{
-    identity::{Delegation, DelegationPermissions, SignedDelegation},
+    identity::{Delegation, DelegationPermissions, SenderInfo, SignedDelegation},
     {Signature, agent::EnvelopeContent},
 };
 use std::{
@@ -158,6 +158,10 @@ impl Identity for AtomicIdentity {
     fn delegation_chain(&self) -> Vec<SignedDelegation> {
         self.inner.load().delegation_chain()
     }
+
+    fn sender_info(&self) -> Option<SenderInfo> {
+        self.inner.load().sender_info()
+    }
 }
 
 /// Returns the smallest expiration time from the delegation chain, nanoseconds since UNIX epoch.
@@ -227,7 +231,7 @@ pub fn delegated_basic_identity(identity: &BasicIdentity, expires_in_ms: u64) ->
     let session = new_basic_identity();
     let delegation = Delegation {
         pubkey: session.public_key().unwrap(),
-        expiration: expiration.as_nanos() as u64,
+        expiration: u64::try_from(expiration.as_nanos()).unwrap_or(u64::MAX),
         targets: None,
         permissions: None,
     };
@@ -434,6 +438,28 @@ mod tests {
 
         // 过期时间应该在未来
         assert!(expiration > now);
+        assert_eq!(
+            get_expiration(&delegated_basic_identity(&basic, u64::MAX)),
+            Some(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn atomic_identity_preserves_sender_info_until_replaced() {
+        let key = crate::CanisterSigPublicKey::new(Principal::management_canister(), vec![1]);
+        let delegated =
+            DelegatedIdentity::new_unchecked(key.to_der(), Box::new(new_basic_identity()), vec![]);
+        let identity =
+            ic_agent::identity::InfoAwareIdentity::new_unchecked(delegated, vec![2], vec![3])
+                .unwrap();
+        let expected = identity.sender_info().unwrap();
+        let atomic = AtomicIdentity::new(Box::new(identity));
+        let actual = atomic.sender_info().unwrap();
+        assert_eq!(actual.info, expected.info);
+        assert_eq!(actual.signer, expected.signer);
+        assert_eq!(actual.sig, expected.sig);
+        atomic.set(Box::new(AnonymousIdentity));
+        assert!(atomic.sender_info().is_none());
     }
 
     #[test]

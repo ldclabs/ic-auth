@@ -10,34 +10,31 @@ categories.workspace = true
 license.workspace = true
 
 [dependencies]
-ic_auth_types = { path = "../ic_auth_types", version = "0.10" }
+ic_auth_types = { path = "../ic_auth_types", version = "0.10.6" }
 # Only `envelope` is needed to verify: `full` would add `identity`, pulling in
 # ic-agent -> reqwest -> rustls -> aws-lc-sys. This server never opens an
 # outbound connection, so that is an unused HTTP+TLS stack (and a C dependency)
 # linked into the binary. The tests do need it, so they enable it below.
-ic_auth_verifier = { path = "../ic_auth_verifier", version = "0.10", features = [
+ic_auth_verifier = { path = "../ic_auth_verifier", version = "0.10.6", features = [
   "envelope",
 ] }
-axum-core = "0.5"
 axum = { version = "0.8", features = [
   "http1",
   "http2",
   "tokio",
 ], default-features = false }
-bytes = "1.11"
 candid = { workspace = true }
-cbor2 = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-http = { workspace = true }
 mime = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "io-std", "sync"] }
 structured-logger = "1"
 log = { version = "0.4", features = ["kv_serde"] }
 
 [dev-dependencies]
+ic-agent = { workspace = true }
 tokio = { version = "1", features = ["time"] }
 tower = { version = "0.5", features = ["util"] }
-ic_auth_verifier = { path = "../ic_auth_verifier", version = "0.10", features = [
+ic_auth_verifier = { path = "../ic_auth_verifier", version = "0.10.6", features = [
   "full",
 ] }

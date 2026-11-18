@@ -1,17 +1,36 @@
-import { encode, rfc8949EncodeOptions } from 'cborg'
+import { encode, rfc8949EncodeOptions, Token, Type } from 'cborg'
 
 export { decode, encode, rfc8949EncodeOptions } from 'cborg'
 
-// cborg < 5.1.4 forced float64 in its RFC 8949 preset. Keep the shortest
-// representation stable across every supported cborg version.
 const deterministicOptions = { ...rfc8949EncodeOptions, float64: false }
+const presetSorter = rfc8949EncodeOptions.mapSorter
+if (rfc8949EncodeOptions.float64 && presetSorter) {
+  // Older presets sort float keys using float64 even when the values are
+  // written at their shortest width. Width can change the order of two floats.
+  deterministicOptions.mapSorter = (left, right) => {
+    const [a] = left
+    const [b] = right
+    if (
+      a instanceof Token &&
+      b instanceof Token &&
+      a.type === Type.float &&
+      b.type === Type.float
+    ) {
+      return compareBytes(
+        encode(a.value, deterministicOptions),
+        encode(b.value, deterministicOptions)
+      )
+    }
+    return presetSorter(left, right)
+  }
+}
 
 /**
  * Encodes data using RFC 8949 deterministic CBOR.
  *
  * Deterministic encoding sorts map keys by the bytewise lexicographic order of
  * their deterministic encodings. Use this before hashing or signing IC-Auth
- * payloads so Rust and TypeScript produce the same bytes.
+ * payloads. Floating-point keys use the same shortest encoding as their values.
  */
 export function deterministicEncode(data: unknown): Uint8Array {
   return encode(data, deterministicOptions)

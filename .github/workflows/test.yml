@@ -9,7 +9,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dfinity/setup-dfx@main
       - name: Run tests
         run: |
           cargo fmt --all -- --check
@@ -46,9 +45,10 @@ jobs:
           pnpm typecheck
           pnpm build
           pnpm test
-      - name: Check minimum supported cborg
+      - name: Check minimum supported SDK peers
         run: |
-          pnpm add --save-dev --save-exact cborg@4.5.0
+          npm pkg set 'devDependencies.@icp-sdk/core=5.0.0' 'devDependencies.@noble/hashes=1.8.0' 'devDependencies.cborg=4.5.0'
+          pnpm install --no-frozen-lockfile
           pnpm typecheck
           pnpm build
           pnpm test

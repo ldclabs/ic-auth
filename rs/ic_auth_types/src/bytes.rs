@@ -193,7 +193,7 @@ impl<const N: usize> ByteArrayB64<N> {
 
     /// Encodes the contained bytes as a standard Base64 string.
     pub fn to_base64(&self) -> String {
-        BASE64_STANDARD.encode(self.0)
+        BASE64_STANDARD.encode(self.as_slice())
     }
 }
 
@@ -644,12 +644,13 @@ fn try_from_base64(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
     // Accept both the prefixed (`b64:...`) and bare forms for backward compatibility.
     let s = s.strip_prefix(B64_PREFIX).unwrap_or(s);
     let v = s.trim_end_matches('=');
-    // Padding is optional here, but it must still be padding: at most two `=`,
-    // and only where the final quantum is short. Without this check `"===="`
-    // and `"AQID===="` decode as if the run of `=` were not there, turning
-    // malformed input into a silently accepted (often empty) byte string.
-    let pad = s.len() - v.len();
-    if pad > 2 || (pad > 0 && !matches!(v.len() % 4, 2 | 3)) {
+    // Allow omitted padding, including the historical partially padded form.
+    let max_padding = match v.len() % 4 {
+        2 => 2,
+        3 => 1,
+        _ => 0,
+    };
+    if s.len() - v.len() > max_padding {
         return Err(base64::DecodeError::InvalidPadding);
     }
     if v.contains(['+', '/']) {
@@ -675,12 +676,7 @@ impl serde::Serialize for BytesB64<'_> {
 /// Handles both Base64URL encoded strings (for human-readable formats) and raw bytes (for binary formats).
 impl<'de> serde::Deserialize<'de> for BytesB64<'_> {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let visitor = deserialize::BytesB64Visitor(core::marker::PhantomData);
-        if deserializer.is_human_readable() {
-            deserializer.deserialize_any(visitor)
-        } else {
-            deserializer.deserialize_byte_buf(visitor)
-        }
+        ByteBufB64::deserialize(deserializer).map(|bytes| Self::from_vec(bytes.into_vec()))
     }
 }
 
@@ -734,10 +730,9 @@ impl<'de, const N: usize> serde::Deserialize<'de> for ByteArrayB64<N> {
 
 /// Module containing visitor implementations for deserialization.
 mod deserialize {
-    use super::{ByteArrayB64, ByteBufB64, BytesB64};
-    use core::{marker::PhantomData, str::FromStr};
+    use super::{ByteArrayB64, ByteBufB64};
+    use core::str::FromStr;
     use serde::de::Error;
-    use std::borrow::Cow;
 
     /// Visitor for deserializing `ByteBufB64` from various formats.
     pub(super) struct ByteBufB64Visitor;
@@ -793,59 +788,6 @@ mod deserialize {
             }
 
             Ok(ByteBufB64(bytes))
-        }
-    }
-
-    /// Visitor for deserializing `BytesB64` from various formats.
-    pub(super) struct BytesB64Visitor<'a>(pub(super) PhantomData<&'a ()>);
-
-    impl<'de, 'a> serde::de::Visitor<'de> for BytesB64Visitor<'a> {
-        type Value = BytesB64<'a>;
-
-        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            formatter.write_str("bytes or string")
-        }
-
-        fn visit_str<E>(self, v: &str) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            BytesB64::from_str(v).map_err(E::custom)
-        }
-
-        fn visit_string<E>(self, v: String) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            BytesB64::from_str(&v).map_err(E::custom)
-        }
-
-        fn visit_bytes<E>(self, v: &[u8]) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(BytesB64(Cow::Owned(v.to_vec())))
-        }
-
-        fn visit_byte_buf<E>(self, v: Vec<u8>) -> Result<Self::Value, E>
-        where
-            E: serde::de::Error,
-        {
-            Ok(BytesB64(Cow::Owned(v)))
-        }
-
-        fn visit_seq<V>(self, mut v: V) -> Result<Self::Value, V::Error>
-        where
-            V: serde::de::SeqAccess<'de>,
-        {
-            let len = core::cmp::min(v.size_hint().unwrap_or(0), 4096);
-            let mut bytes = Vec::with_capacity(len);
-
-            while let Some(b) = v.next_element()? {
-                bytes.push(b);
-            }
-
-            Ok(BytesB64(Cow::Owned(bytes)))
         }
     }
 
@@ -1065,7 +1007,15 @@ mod tests {
 
         // Runs of `=` are not a substitute for data: these used to decode to
         // empty bytes / a truncated buffer instead of failing.
-        for malformed in ["=", "====", "b64:====", "AQID=", "AQID====", "AQIDBA======"] {
+        for malformed in [
+            "=",
+            "====",
+            "b64:====",
+            "AQI==",
+            "AQID=",
+            "AQID====",
+            "AQIDBA======",
+        ] {
             assert_eq!(
                 ByteBufB64::from_str(malformed).unwrap_err(),
                 base64::DecodeError::InvalidPadding,
@@ -1133,7 +1083,6 @@ mod tests {
         assert_eq!(buf.to_base64(), "AgM=");
         assert_eq!(buf.clone().into_vec(), vec![2, 3]);
         assert_eq!(buf.clone().into_boxed_slice().as_ref(), &[2, 3]);
-        assert_eq!(buf.clone().into_iter().collect::<Vec<_>>(), vec![2, 3]);
         assert_eq!(buf.clone().into_iter().collect::<Vec<_>>(), vec![2, 3]);
 
         for byte in &mut buf {
@@ -1305,18 +1254,7 @@ mod tests {
         let bytebuf = deserialize::ByteBufB64Visitor.visit_seq(seq).unwrap();
         assert_eq!(bytebuf.as_ref(), &[10, 11, 12]);
 
-        let bytes = deserialize::BytesB64Visitor(core::marker::PhantomData)
-            .visit_string::<ValueError>("AQID".to_string())
-            .unwrap();
-        assert_eq!(bytes.as_ref(), &[1, 2, 3]);
-        let bytes = deserialize::BytesB64Visitor(core::marker::PhantomData)
-            .visit_bytes::<ValueError>(&[4, 5, 6])
-            .unwrap();
-        assert_eq!(bytes.as_ref(), &[4, 5, 6]);
-        let seq = SeqDeserializer::<_, ValueError>::new(vec![7u8, 8, 9].into_iter());
-        let bytes = deserialize::BytesB64Visitor(core::marker::PhantomData)
-            .visit_seq(seq)
-            .unwrap();
+        let bytes: BytesB64<'static> = serde_json::from_str("[7,8,9]").unwrap();
         assert_eq!(bytes.as_ref(), &[7, 8, 9]);
 
         let array = deserialize::ByteArrayB64Visitor::<3>

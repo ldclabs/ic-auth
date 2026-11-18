@@ -1,11 +1,11 @@
 //! Verification and signing utilities for IC-Auth.
 //!
 //! The base crate verifies raw signatures for the public key formats used by
-//! Internet Computer identities: Ed25519, ECDSA P-256, ECDSA secp256k1, and IC
-//! canister signatures. Optional features add higher-level protocol surfaces:
+//! Internet Computer identities, including Ed25519, ECDSA P-256, and ECDSA
+//! secp256k1. Optional features add canister verification and signing.
 //!
-//! - `envelope`: [`SignedEnvelope`] parsing, verification, HTTP headers, and
-//!   deep-link payload helpers.
+//! - `envelope` adds canister signatures, `SignedEnvelope` parsing and
+//!   verification, HTTP headers, and deep-link payload helpers.
 //! - `identity`: `ic-agent` identity helpers for clients and services that
 //!   need to sign envelopes. This feature is intended for native/server
 //!   targets, not canisters.

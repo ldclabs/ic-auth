@@ -1,3 +1,4 @@
+import { createRequire } from 'node:module'
 import { DelegationChain, DelegationIdentity } from '@icp-sdk/core/identity'
 import { afterEach, assert, describe, it, vi } from 'vitest'
 import { deterministicEncode } from './cbor.js'
@@ -75,6 +76,40 @@ describe('DelegationIdentity', () => {
     assert.deepEqual(signed.h, digest)
     assert.equal(signed.d?.length, 1)
     assert.deepEqual(signed.d?.[0]?.d.p, session.getPublicKey().toDer())
+  })
+
+  it('preserves a delegation supplied by the CommonJS SDK', async () => {
+    const sdk: typeof import('@icp-sdk/core/identity') = createRequire(
+      import.meta.url
+    )('@icp-sdk/core/identity')
+    const root = sdk.Ed25519KeyIdentity.generate()
+    const session = sdk.Ed25519KeyIdentity.generate()
+    const chain = await sdk.DelegationChain.create(root, session.getPublicKey())
+    const identity = sdk.DelegationIdentity.fromDelegation(session, chain)
+
+    const envelope = await signArbitrary(
+      toDelegationIdentity(identity),
+      Uint8Array.of(1)
+    )
+    assert.deepEqual(envelope.p, root.getPublicKey().toDer())
+    assert.deepEqual(envelope.d?.[0]?.s, chain.delegations[0].signature)
+  })
+
+  it('signs a snapshot when the caller reuses the input buffer', async () => {
+    const id = Ed25519KeyIdentity.generate()
+    const buffer = Buffer.from([0, 1, 2, 3])
+    const pending = signArbitrary(toDelegationIdentity(id), buffer.subarray(1))
+    buffer.fill(0)
+
+    const envelope = await pending
+    assert.deepEqual(envelope.h, Uint8Array.of(1, 2, 3))
+    assert.isTrue(
+      Ed25519KeyIdentity.verify(
+        envelope.s,
+        Uint8Array.of(1, 2, 3),
+        id.getPublicKey().toRaw()
+      )
+    )
   })
 })
 
@@ -197,7 +232,13 @@ describe('base64', () => {
       assert.deepEqual(fromBase64('b64:AQID'), new Uint8Array([1, 2, 3]))
       assert.deepEqual(base64ToBytes('b64:-_8'), new Uint8Array([251, 255]))
       assert.deepEqual(fromBase64('b64:'), new Uint8Array())
-      for (const malformed of ['AQ!D', 'AQID====', 'b64:AQ!D', 'b64b64:AQID']) {
+      for (const malformed of [
+        'AQ!D',
+        'AQID====',
+        'b64:AQ!D',
+        'b64b64:AQID',
+        '+/__'
+      ]) {
         assert.throws(
           () => fromBase64(malformed),
           undefined,

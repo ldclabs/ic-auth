@@ -15,6 +15,19 @@ struct Message<'a> {
 }
 
 #[test]
+fn floating_point_map_keys_match_the_sdk() {
+    use cbor2::Value;
+    let map = Value::Map(vec![
+        (Value::Float(0.9), Value::from("a")),
+        (Value::Float(1.5), Value::from("b")),
+    ]);
+    assert_eq!(
+        hex::encode(deterministic_cbor_into_vec(&map).unwrap()),
+        include_str!("fixtures/float-map.hex").trim()
+    );
+}
+
+#[test]
 fn verifies_typescript_delegation_with_targets_and_a_structured_digest() {
     let message = deterministic_cbor_into_vec(&Message {
         amount: 1.5,

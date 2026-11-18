@@ -25,12 +25,14 @@ export {
 export function toDelegationIdentity(
   identity: SignIdentity
 ): DelegationIdentity {
-  return identity instanceof DelegationIdentity
-    ? identity
-    : DelegationIdentity.fromDelegation(
-        identity,
-        DelegationChain.fromDelegations([], identity.getPublicKey().toDer())
-      )
+  if (identity instanceof DelegationIdentity) return identity
+
+  // The peer SDK can be loaded through both its ESM and CommonJS entry points.
+  const chain: DelegationChain =
+    'getDelegation' in identity && typeof identity.getDelegation === 'function'
+      ? identity.getDelegation()
+      : DelegationChain.fromDelegations([], identity.getPublicKey().toDer())
+  return DelegationIdentity.fromDelegation(identity, chain)
 }
 
 /**
@@ -43,14 +45,15 @@ export async function signArbitrary(
   identity: DelegationIdentity,
   data: Uint8Array
 ): Promise<SignedEnvelopeCompact> {
-  const sig = await identity.sign(data)
+  const signedBytes = new Uint8Array(data)
+  const sig = await identity.sign(signedBytes)
   const delegations = identity
     .getDelegation()
     .delegations.map(toSignedDelegationCompact)
   const val: SignedEnvelopeCompact = {
     p: identity.getPublicKey().toDer(),
     s: new Uint8Array(sig),
-    h: data
+    h: signedBytes
   }
   if (delegations.length > 0) {
     val.d = delegations
@@ -114,15 +117,20 @@ const B64_PREFIX = 'b64:'
  */
 export function fromBase64(str: string): Uint8Array {
   const data = str.startsWith(B64_PREFIX) ? str.slice(B64_PREFIX.length) : str
+  const urlSafe = data.includes('-') || data.includes('_')
   if (typeof Uint8Array.fromBase64 === 'function') {
-    if (data.includes('-') || data.includes('_')) {
+    if (urlSafe) {
       return Uint8Array.fromBase64(data, { alphabet: 'base64url' })
     }
     return Uint8Array.fromBase64(data)
   }
   // Not Node's `Buffer`: it skips invalid characters instead of rejecting
   // them, so malformed input would decode to the wrong bytes.
-  const binary = globalThis.atob(data.replaceAll('-', '+').replaceAll('_', '/'))
+  if (urlSafe && /[+/]/.test(data))
+    throw new SyntaxError('Mixed Base64 alphabets')
+  const binary = globalThis.atob(
+    urlSafe ? data.replaceAll('-', '+').replaceAll('_', '/') : data
+  )
   const out = new Uint8Array(binary.length)
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i)
   return out

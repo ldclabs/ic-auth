@@ -11,11 +11,16 @@
 
 #[cfg(not(test))]
 use axum::BoxError;
-use axum::{Router, extract::DefaultBodyLimit, http::StatusCode, response::IntoResponse, routing};
+use axum::{
+    Router,
+    extract::{DefaultBodyLimit, State},
+    http::{self, HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
+    routing,
+};
 use candid::Principal;
-use http::HeaderMap;
-use ic_auth_types::{ByteArrayB64, ByteBufB64, cbor_from_slice};
-use ic_auth_verifier::SignedEnvelope;
+use ic_auth_types::{ByteArrayB64, ByteBufB64, DelegationPermissions, cbor_from_slice};
+use ic_auth_verifier::{MAX_CERT_TIME_OFFSET_NS, SignedEnvelope};
 use serde::{Deserialize, Serialize};
 #[cfg(not(test))]
 use std::net::SocketAddr;
@@ -28,7 +33,7 @@ use tokio::signal;
 use tokio::sync::Semaphore;
 
 mod content;
-use content::Content;
+use content::{Content, Format, text_response};
 
 const APP_NAME: &str = env!("CARGO_PKG_NAME");
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -53,6 +58,8 @@ struct VerifyInput {
 struct VerifyOutput {
     /// Principal derived from the verified envelope public key.
     user: Principal,
+    /// Request types permitted by every link in the verified delegation chain.
+    permissions: DelegationPermissions,
 }
 
 #[derive(Clone, Serialize)]
@@ -74,21 +81,37 @@ async fn main() -> Result<(), BoxError> {
 
     let addr_str = std::env::var("SOCKET_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
     let addr: SocketAddr = addr_str.parse()?;
+    let certificate_time_offset_ns = match std::env::var("MAX_CERT_TIME_OFFSET_SECS") {
+        Ok(value) => {
+            let seconds: u64 = value
+                .parse()
+                .map_err(|err| format!("invalid MAX_CERT_TIME_OFFSET_SECS: {err}"))?;
+            std::time::Duration::from_secs(seconds).as_nanos()
+        }
+        Err(std::env::VarError::NotPresent) => MAX_CERT_TIME_OFFSET_NS,
+        Err(err) => return Err(format!("invalid MAX_CERT_TIME_OFFSET_SECS: {err}").into()),
+    };
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    log::warn!("{}@{} listening on {:?}", APP_NAME, APP_VERSION, addr);
+    log::warn!(
+        "{}@{} listening on {}",
+        APP_NAME,
+        APP_VERSION,
+        listener.local_addr()?
+    );
 
-    axum::serve(listener, app())
+    axum::serve(listener, app(certificate_time_offset_ns))
         .with_graceful_shutdown(shutdown_signal())
         .await?;
 
     Ok(())
 }
 
-fn app() -> Router {
+fn app(certificate_time_offset_ns: u128) -> Router {
     Router::new()
         .route("/", routing::get(get_information))
         .route("/verify", routing::post(post_verify))
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
+        .with_state(certificate_time_offset_ns)
 }
 
 #[cfg(not(test))]
@@ -123,14 +146,14 @@ async fn get_information(headers: HeaderMap) -> impl IntoResponse {
         name: APP_NAME,
         version: APP_VERSION,
     };
-    match Content::from(&headers) {
-        Content::Json((), _) => Content::Json(info, None),
-        Content::Cbor((), _) => Content::Cbor(info, None),
-        _ => Content::Text(
+    let response = match Format::for_response(&headers) {
+        Some(format) => Content(format, info).into_response(),
+        None => text_response(
+            StatusCode::NOT_ACCEPTABLE,
             "supported content types: application/json, application/cbor".into(),
-            Some(StatusCode::NOT_ACCEPTABLE),
         ),
-    }
+    };
+    ([(http::header::VARY, "Accept, Content-Type")], response)
 }
 
 // Limit CPU work independently of Tokio's blocking-thread pool size.
@@ -143,28 +166,20 @@ static VERIFY_SLOTS: LazyLock<Arc<Semaphore>> = LazyLock::new(|| {
 type VerifyError = (StatusCode, String);
 
 /// POST /verify
-async fn post_verify(ct: Content<VerifyInput>) -> impl IntoResponse {
-    let wants_cbor = matches!(ct, Content::Cbor(_, _));
-    let req = match ct {
-        Content::Cbor(req, _) | Content::Json(req, _) => req,
-        _ => {
-            return Content::Text(
-                "supported content types: application/json, application/cbor".into(),
-                Some(StatusCode::NOT_ACCEPTABLE),
-            );
-        }
-    };
-
-    match verify_with_limit(req, Arc::clone(&VERIFY_SLOTS)).await {
-        Ok(out) if wants_cbor => Content::Cbor(out, None),
-        Ok(out) => Content::Json(out, None),
-        Err((status, err)) => Content::Text(err, Some(status)),
+async fn post_verify(
+    State(certificate_time_offset_ns): State<u128>,
+    Content(format, req): Content<VerifyInput>,
+) -> Response {
+    match verify_with_limit(req, Arc::clone(&VERIFY_SLOTS), certificate_time_offset_ns).await {
+        Ok(out) => Content(format, out).into_response(),
+        Err((status, err)) => text_response(status, err),
     }
 }
 
 async fn verify_with_limit(
     req: VerifyInput,
     slots: Arc<Semaphore>,
+    certificate_time_offset_ns: u128,
 ) -> Result<VerifyOutput, VerifyError> {
     let permit = slots.acquire_owned().await.map_err(|_| {
         (
@@ -176,7 +191,7 @@ async fn verify_with_limit(
         // Keep the permit until CPU work finishes, even if the HTTP caller
         // disconnects and drops its waiting future.
         let _permit = permit;
-        verify_request(req)
+        verify_request(req, certificate_time_offset_ns)
     })
     .await
     .map_err(|err| {
@@ -188,7 +203,10 @@ async fn verify_with_limit(
     })?
 }
 
-fn verify_request(req: VerifyInput) -> Result<VerifyOutput, VerifyError> {
+fn verify_request(
+    req: VerifyInput,
+    certificate_time_offset_ns: u128,
+) -> Result<VerifyOutput, VerifyError> {
     let signed_envelope: SignedEnvelope =
         cbor_from_slice(req.signed_envelope.as_slice()).map_err(|err| {
             (
@@ -197,27 +215,27 @@ fn verify_request(req: VerifyInput) -> Result<VerifyOutput, VerifyError> {
             )
         })?;
     // Read time when verification starts, after any wait for a CPU slot.
-    signed_envelope
-        .verify(
+    let permissions = signed_envelope
+        .verify_with_certificate_time_offset(
             unix_ms(),
             req.expect_target,
             req.expect_digest.as_ref().map(|d| d.as_slice()),
+            certificate_time_offset_ns,
         )
         .map_err(|err| (StatusCode::UNAUTHORIZED, err))?;
     Ok(VerifyOutput {
         user: signed_envelope.sender(),
+        permissions,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::body::to_bytes;
+    use axum::body::{Bytes, to_bytes};
     use ic_auth_verifier::{BasicIdentity, Identity};
 
-    async fn response_parts(
-        response: axum::response::Response,
-    ) -> (StatusCode, HeaderMap, bytes::Bytes) {
+    async fn response_parts(response: axum::response::Response) -> (StatusCode, HeaderMap, Bytes) {
         let status = response.status();
         let headers = response.headers().clone();
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
@@ -225,8 +243,11 @@ mod tests {
     }
 
     fn signed_verify_input() -> (VerifyInput, Principal) {
-        let identity = BasicIdentity::from_raw_key(&[8u8; 32]);
-        let envelope = SignedEnvelope::sign_message(&identity, b"hello world").unwrap();
+        input_for(&BasicIdentity::from_raw_key(&[8u8; 32]))
+    }
+
+    fn input_for(identity: &impl Identity) -> (VerifyInput, Principal) {
+        let envelope = SignedEnvelope::sign_message(identity, b"hello world").unwrap();
         let user = identity.sender().unwrap();
         (
             VerifyInput {
@@ -300,9 +321,7 @@ mod tests {
         assert_eq!(status, StatusCode::NOT_ACCEPTABLE);
         assert_eq!(
             body,
-            bytes::Bytes::from_static(
-                b"supported content types: application/json, application/cbor"
-            )
+            Bytes::from_static(b"supported content types: application/json, application/cbor")
         );
     }
 
@@ -311,18 +330,22 @@ mod tests {
         let (input, user) = signed_verify_input();
 
         let (status, headers, body) = response_parts(
-            post_verify(Content::Json(input.clone(), None))
-                .await
-                .into_response(),
+            post_verify(
+                State(MAX_CERT_TIME_OFFSET_NS),
+                Content(Format::Json, input.clone()),
+            )
+            .await
+            .into_response(),
         )
         .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[http::header::CONTENT_TYPE], "application/json");
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["user"], user.to_text());
+        assert_eq!(value["permissions"], "all");
 
         let (status, headers, body) = response_parts(
-            post_verify(Content::Cbor(input, None))
+            post_verify(State(MAX_CERT_TIME_OFFSET_NS), Content(Format::Cbor, input))
                 .await
                 .into_response(),
         )
@@ -331,27 +354,85 @@ mod tests {
         assert_eq!(headers[http::header::CONTENT_TYPE], "application/cbor");
         let value: VerifyOutput = cbor_from_slice(body.as_ref()).unwrap();
         assert_eq!(value.user, user);
+        assert_eq!(value.permissions, DelegationPermissions::All);
     }
 
     #[tokio::test]
-    async fn post_verify_rejects_unsupported_bad_and_unauthorized_inputs() {
-        let (status, _, _) = response_parts(
-            post_verify(Content::<VerifyInput>::Text("".to_string(), None))
-                .await
-                .into_response(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_ACCEPTABLE);
+    async fn post_verify_returns_the_permissions_shared_by_all_links() {
+        use ic_agent::identity::{
+            DelegatedIdentity, Delegation, DelegationPermissions as Permissions, SignedDelegation,
+        };
+        use tower::ServiceExt;
 
+        for (first, second, expected) in [
+            (
+                Some(Permissions::Queries),
+                Some(Permissions::All),
+                "queries",
+            ),
+            (None, Some(Permissions::Queries), "queries"),
+            (Some(Permissions::All), None, "all"),
+        ] {
+            let root = BasicIdentity::from_raw_key(&[1; 32]);
+            let middle = BasicIdentity::from_raw_key(&[2; 32]);
+            let session = BasicIdentity::from_raw_key(&[3; 32]);
+            let chain = [(&root, &middle, first), (&middle, &session, second)]
+                .into_iter()
+                .map(|(from, to, permissions)| {
+                    let delegation = Delegation {
+                        pubkey: to.public_key().unwrap(),
+                        expiration: u64::MAX,
+                        targets: None,
+                        permissions,
+                    };
+                    let signature = from
+                        .sign_delegation(&delegation)
+                        .unwrap()
+                        .signature
+                        .unwrap();
+                    SignedDelegation {
+                        delegation,
+                        signature,
+                    }
+                })
+                .collect();
+            let delegated = DelegatedIdentity::new_unchecked(
+                root.public_key().unwrap(),
+                Box::new(session),
+                chain,
+            );
+            let (input, user) = input_for(&delegated);
+            let response = app(MAX_CERT_TIME_OFFSET_NS)
+                .oneshot(
+                    http::Request::post("/verify")
+                        .header(http::header::CONTENT_TYPE, "application/json")
+                        .body(axum::body::Body::from(serde_json::to_vec(&input).unwrap()))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            let (status, _, body) = response_parts(response).await;
+            assert_eq!(status, StatusCode::OK);
+            let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
+            assert_eq!(value["permissions"], expected);
+            assert_eq!(value["user"], user.to_text());
+        }
+    }
+
+    #[tokio::test]
+    async fn post_verify_rejects_bad_and_unauthorized_inputs() {
         let bad_cbor = VerifyInput {
             signed_envelope: vec![0xff].into(),
             expect_target: None,
             expect_digest: None,
         };
         let (status, _, body) = response_parts(
-            post_verify(Content::Json(bad_cbor, None))
-                .await
-                .into_response(),
+            post_verify(
+                State(MAX_CERT_TIME_OFFSET_NS),
+                Content(Format::Json, bad_cbor),
+            )
+            .await
+            .into_response(),
         )
         .await;
         assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -364,7 +445,7 @@ mod tests {
         let (mut input, _) = signed_verify_input();
         input.expect_digest = Some([0; 32].into());
         let (status, _, body) = response_parts(
-            post_verify(Content::Json(input, None))
+            post_verify(State(MAX_CERT_TIME_OFFSET_NS), Content(Format::Json, input))
                 .await
                 .into_response(),
         )
@@ -389,7 +470,7 @@ mod tests {
         };
 
         let (input, user) = signed_verify_input();
-        let response = app()
+        let response = app(MAX_CERT_TIME_OFFSET_NS)
             .oneshot(post(serde_json::to_vec(&input).unwrap()))
             .await
             .unwrap();
@@ -397,16 +478,17 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let value: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(value["user"], user.to_text());
+        assert_eq!(value["permissions"], "all");
 
         // Whitespace is valid JSON padding, so only the size limit can reject
         // this body.
-        let response = app()
+        let response = app(MAX_CERT_TIME_OFFSET_NS)
             .oneshot(post(vec![b' '; MAX_BODY_BYTES + 1]))
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
 
-        let response = app()
+        let response = app(MAX_CERT_TIME_OFFSET_NS)
             .oneshot(
                 http::Request::get("/")
                     .body(axum::body::Body::empty())
@@ -415,31 +497,6 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn content_other_responses_for_handler_output_types() {
-        let (status, headers, body) = response_parts(
-            Content::<InfoOutput<'_>>::Other("application/xml".to_string(), None).into_response(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-        assert_eq!(headers[http::header::CONTENT_TYPE], "text/plain");
-        assert_eq!(
-            body,
-            bytes::Bytes::from_static(b"Unsupported MIME type: application/xml")
-        );
-
-        let (status, headers, body) = response_parts(
-            Content::<VerifyOutput>::Other("application/xml".to_string(), None).into_response(),
-        )
-        .await;
-        assert_eq!(status, StatusCode::UNSUPPORTED_MEDIA_TYPE);
-        assert_eq!(headers[http::header::CONTENT_TYPE], "text/plain");
-        assert_eq!(
-            body,
-            bytes::Bytes::from_static(b"Unsupported MIME type: application/xml")
-        );
     }
 
     #[tokio::test]
@@ -476,6 +533,10 @@ mod tests {
             let response = get_information(headers).await.into_response();
             assert_eq!(response.status(), status, "{accept}");
             assert_eq!(
+                response.headers()[http::header::VARY],
+                "Accept, Content-Type"
+            );
+            assert_eq!(
                 response.headers()[http::header::CONTENT_TYPE],
                 content_type,
                 "{accept}"
@@ -496,7 +557,11 @@ mod tests {
         let slots = Arc::new(Semaphore::new(1));
         let held = slots.clone().acquire_owned().await.unwrap();
         let (input, user) = signed_verify_input();
-        let mut pending = Box::pin(verify_with_limit(input, slots.clone()));
+        let mut pending = Box::pin(verify_with_limit(
+            input,
+            slots.clone(),
+            MAX_CERT_TIME_OFFSET_NS,
+        ));
         assert!(
             tokio::time::timeout(Duration::from_millis(10), pending.as_mut())
                 .await
@@ -518,7 +583,7 @@ mod tests {
             expect_digest: None,
         };
         assert!(matches!(
-            verify_with_limit(bad, slots.clone()).await,
+            verify_with_limit(bad, slots.clone(), MAX_CERT_TIME_OFFSET_NS).await,
             Err((StatusCode::BAD_REQUEST, _))
         ));
         assert_eq!(slots.available_permits(), 1);

@@ -63,7 +63,7 @@ pnpm deploy
 
 Before deploying into your account, review the Worker name, container name, instance type, `max_instances`, and idle timeout for your workload. The default `workers_dev: false` and `preview_urls: false` configuration exposes the Worker through service bindings, without a public development URL. Configure a custom route or explicitly enable `workers_dev` if you want a public endpoint.
 
-The container uses the Rust verifier's built-in mainnet root key and verification limits. It does not need an outbound network connection or secrets. See the [Wrangler container configuration reference](https://developers.cloudflare.com/workers/wrangler/configuration/#containers) for alternate image sources and deployment settings.
+The container uses the Rust verifier's mainnet root key and default 47-day certificate window. To set a different window, add `"vars": { "MAX_CERT_TIME_OFFSET_SECS": "300" }` to the deployment's Wrangler configuration. The Worker passes this string to the container when it starts. See the [Wrangler container configuration reference](https://developers.cloudflare.com/workers/wrangler/configuration/#containers) for image sources and deployment settings.
 
 ### Bind from another Worker
 

@@ -63,7 +63,9 @@ fn main() -> Result<(), String> {
 - Delegation expiration is encoded in **nanoseconds**, with a permitted clock drift of 300,000 milliseconds (5 minutes).
 - When `expect_target` is supplied, every delegation with a target list must include it. Omitting `expect_target` skips target membership checks; unrestricted delegations remain valid.
 - When `expect_digest` and an embedded digest are both present, they must match. Either may supply the signed bytes; verification fails if both are absent.
-- Delegation `permissions` are included in the signed delegation message. The verifier does not classify your application's operation as a query or update; enforce that policy in the application.
+- Delegation signatures cover `permissions`. A single `queries` link limits the entire chain to queries and `read_state`. A chain containing only `all` or omitted permissions, and an identity without delegations, have effective permissions of `all`.
+
+`SignedEnvelope::verify_with_certificate_time_offset(now_ms, expect_target, expect_digest, offset_ns)` returns these effective `DelegationPermissions` after successful verification. Supply `MAX_CERT_TIME_OFFSET_NS` to use the default window. A write handler can require `DelegationPermissions::All` alongside its application authorization checks.
 
 Compute the expected digest from the request or server-issued challenge. An embedded digest alone proves a signature over those bytes, not that they match the current HTTP request. Challenge expiry, one-time use, and application authorization are caller responsibilities. `sender()` only derives a principal; call it for authentication after `verify` succeeds.
 
@@ -85,7 +87,7 @@ Two HTTP representations are supported:
 | `to_authorization` / `from_authorization` | `Authorization: ICP <base64url-cbor-envelope>` (scheme parsing is case-insensitive) |
 | `to_headers` / `from_headers` | Individual headers listed below |
 
-The component headers are `IC-Auth-Pubkey`, `IC-Auth-Content-Digest`, `IC-Auth-Signature`, and optional `IC-Auth-Delegation`. Values are unprefixed Base64URL; the delegation value contains CBOR. Component parsing requires the pubkey, digest, and signature. Both parsing APIs return `None` for missing or malformed data; a malformed delegation header also invalidates the envelope.
+Component headers require `IC-Auth-Pubkey` and `IC-Auth-Signature`. Both `IC-Auth-Content-Digest` and `IC-Auth-Delegation` are optional. Values are unprefixed Base64URL, with CBOR inside the delegation header. When the digest header is absent, pass the application's expected digest to `verify`. A malformed digest or delegation header makes `from_headers` return `None`.
 
 `IC-Auth-User` and `extract_user` carry/read principal metadata; they do not verify a signature. An application trusting a proxy's authenticated principal must establish that trust separately.
 
@@ -114,7 +116,7 @@ With `envelope` enabled:
 
 Successful BLS verifications and whole canister signatures are remembered in a bounded in-process cache. A repeated canister signature, such as the delegation a session sends with every request, is accepted after re-checking only its certificate time.
 
-The signature/certificate APIs take UNIX time in **nanoseconds**. `verify_canister_sig` defaults to a certificate time offset of 47 days in either direction; pass `Some(offset_ns)` for a different window. High-level envelope verification uses that default. Certificate freshness and delegation expiration are separate checks.
+The signature/certificate APIs take UNIX time in **nanoseconds**. The default certificate window is 47 days in either direction. Pass `Some(offset_ns)` to `verify_canister_sig` or call `SignedEnvelope::verify_with_certificate_time_offset` to set a different window. The envelope applies it to each canister-signed delegation and to the final signature, including cache hits. Delegation expiration has its own clock-drift allowance.
 
 ## Identity helpers
 
@@ -131,7 +133,7 @@ The `identity` feature re-exports `Identity`, `BasicIdentity`, `DelegatedIdentit
 
 The `envelope` feature exposes `DeepLinkRequest`, `DeepLinkResponse`, `SignInRequest`, and `SignInResponse`.
 
-`DeepLinkRequest::try_to_url` appends `os`, `action`, and optional `next_url` query parameters. Its payload becomes deterministic CBOR in a `b64:`-prefixed Base64URL fragment. Prefer this fallible method when serialization can fail; `to_url` panics on a serialization error.
+`DeepLinkRequest::try_to_url` sets `os`, `action`, and optional `next_url` from the request, preserving other endpoint query parameters. Its payload becomes deterministic CBOR in a `b64:`-prefixed Base64URL fragment. Use `try_to_url` to handle serialization errors.
 
 Parse a callback with `DeepLinkResponse::from_url`, then decode its payload with `get_payload::<SignInResponse>()`. Parsing only decodes data; validate the origin and returned delegation chain before adopting the session.
 
@@ -165,4 +167,4 @@ Install the WASM target with `rustup target add wasm32-unknown-unknown` if neede
 
 Copyright © 2024-2026 [LDC Labs](https://github.com/ldclabs).
 
-Licensed under the MIT License. See [LICENSE](../../LICENSE).
+Licensed under the MIT License. See [LICENSE](LICENSE).

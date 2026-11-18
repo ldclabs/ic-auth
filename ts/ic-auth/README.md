@@ -20,7 +20,7 @@ The package ships ES modules and TypeScript declarations. It supports browser ap
 | `@noble/hashes` | `>=1.8.0` |
 | `cborg`         | `>=4.5.0` |
 
-The examples use top-level `await`, so run them as ES modules. The package has an independent release version from the Rust workspace; see [package.json](package.json).
+The examples use top-level `await`, so run them as ES modules. Check the Node.js requirement of the peer version you install. For example, `@noble/hashes@2.4.0` requires Node.js 20.19 or newer. The package has an independent release version from the Rust workspace. See [package.json](package.json).
 
 ## Sign a structured message
 
@@ -72,7 +72,9 @@ The SDK does not define the application's challenge schema. The verifier should 
 
 ## Deterministic CBOR and binary fields
 
-`deterministicEncode` wraps `cborg`'s `encode` with RFC 8949 options and explicitly selects the shortest floating-point representation. This keeps encoded bytes stable with cborg versions before 5.1.4, whose preset forced float64. The package also exports `encode`, `decode`, `rfc8949EncodeOptions`, and `compareBytes`; the re-exported options are cborg's own preset.
+`deterministicEncode` uses the shortest floating-point representation for values and for sorting Map keys across supported cborg versions. String keys are portable across languages. cborg has limited support for array and object keys. The SDK also exports `encode`, `decode`, `rfc8949EncodeOptions`, and `compareBytes`. See [RFC 8949 deterministic encoding](https://www.rfc-editor.org/rfc/rfc8949.html#section-4.2.1).
+
+Existing signatures still verify against their original bytes. For historical records signed with an earlier SDK and cborg before 5.1.4, re-encoding a Map with multiple floating-point keys can change its digest. Use the trusted message bytes or expected digest recorded when the signature was issued. If you stored only the structured value, reproduce the historical digest with the original cborg version and `sha3_256(encode(value, { ...rfc8949EncodeOptions, float64: false }))`.
 
 Use `Uint8Array` for binary fields and `bigint` for delegation expiration in nanoseconds. Match the exact field names, value types, and optional-field presence on both sides when signing across languages. The default `encode` function is available for ordinary CBOR; use `deterministicEncode` for signed or hashed data.
 
@@ -127,7 +129,7 @@ pnpm test
 pnpm coverage
 ```
 
-`pnpm build` emits JavaScript and declarations into `dist`. `pnpm typecheck` checks source and test types. Tests cover CBOR fixtures shared with Rust, wire conversions, delegation permissions, identity signing, and native/Node/browser Base64 handling. CI also runs the SDK with the minimum supported cborg version. `pnpm format` formats sources, configuration and this README with Prettier.
+`pnpm build` emits JavaScript and declarations into `dist`. Packing the SDK also runs this build. `pnpm typecheck` checks source and test types. Tests cover CBOR fixtures shared with Rust, wire conversions, delegation permissions, identity signing, and native/Node/browser Base64 handling. CI also runs the SDK with its minimum supported peer versions. `pnpm format` formats sources, configuration and this README with Prettier.
 
 ## Related packages
 

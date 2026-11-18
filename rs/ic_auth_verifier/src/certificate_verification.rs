@@ -19,15 +19,15 @@
 //! <https://internetcomputer.org/docs/current/references/ic-interface-spec#certification>
 
 use candid::Principal;
+use ic_canister_sig_creation::{
+    IC_ROOT_PK_DER_PREFIX as DER_PREFIX, IC_ROOT_PK_LENGTH as KEY_LENGTH,
+};
 use ic_certification::{Certificate, Delegation, LookupResult, SubtreeLookupResult};
 use serde_bytes::ByteBuf;
 
 use crate::signature_cache::SignatureCache;
 
 pub const IC_STATE_ROOT_DOMAIN_SEPARATOR: &[u8; 14] = b"\x0Dic-state-root";
-
-const DER_PREFIX: &[u8; 37] = b"\x30\x81\x82\x30\x1d\x06\x0d\x2b\x06\x01\x04\x01\x82\xdc\x7c\x05\x03\x01\x02\x01\x06\x0c\x2b\x06\x01\x04\x01\x82\xdc\x7c\x05\x03\x02\x01\x03\x61\x00";
-const KEY_LENGTH: usize = 96;
 
 /// Verifies a certificate against `root_public_key`, the DER-encoded IC root
 /// public key.
@@ -701,7 +701,7 @@ mod tests {
             signature: vec![],
             delegation: None,
         };
-        parse_certificate_cbor(&tagged_cbor(&certificate)).unwrap();
+        let _: ic_agent::Certificate = parse_certificate_cbor(&tagged_cbor(&certificate)).unwrap();
 
         assert_eq!(
             parse_certificate_cbor(&[]).unwrap_err(),

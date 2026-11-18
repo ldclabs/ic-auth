@@ -2,9 +2,18 @@ import { Container } from '@cloudflare/containers'
 import { instanceFor } from './region.js'
 
 /** Runs rs/ic_auth_verify_server using the Dockerfile in wrangler.jsonc. */
-export class AuthContainer extends Container<Env> {
+export class AuthContainer extends Container<
+	Omit<Env, 'MAX_CERT_TIME_OFFSET_SECS'> & {
+		MAX_CERT_TIME_OFFSET_SECS?: string
+	}
+> {
 	defaultPort = 8080
-	envVars = { SOCKET_ADDR: '0.0.0.0:8080' }
+	envVars = {
+		SOCKET_ADDR: '0.0.0.0:8080',
+		...(this.env.MAX_CERT_TIME_OFFSET_SECS !== undefined && {
+			MAX_CERT_TIME_OFFSET_SECS: this.env.MAX_CERT_TIME_OFFSET_SECS
+		})
+	}
 	// The verifier serves GET /, not the library's default /ping endpoint.
 	pingEndpoint = 'localhost/'
 	// Keep instances warm across short traffic gaps; tune for your workload.

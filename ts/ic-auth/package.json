@@ -1,13 +1,14 @@
 {
   "name": "@ldclabs/ic-auth",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "type": "module",
   "description": "TypeScript client SDK for IC-Auth identities, deterministic CBOR signing, and compact envelope types.",
   "license": "MIT",
   "homepage": "https://github.com/ldclabs/ic-auth/tree/main/ts/ic-auth",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ldclabs/ic-auth.git"
+    "url": "git+https://github.com/ldclabs/ic-auth.git",
+    "directory": "ts/ic-auth"
   },
   "engines": {
     "node": ">=20.0.0"
@@ -20,7 +21,8 @@
   "main": "./dist/index.js",
   "typings": "./dist/index.d.ts",
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json",
+    "build": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\" && tsc -p tsconfig.json",
+    "prepack": "npm run build",
     "format": "prettier --write src *.json README.md",
     "coverage": "vitest run --coverage",
     "test": "vitest run",

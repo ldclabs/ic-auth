@@ -1,6 +1,6 @@
 # `ic_auth_verify_server`
 
-An HTTP service that verifies [IC-Auth](../../README.md) envelopes and returns the authenticated Internet Computer principal. It accepts JSON or CBOR request bodies and uses `ic_auth_verifier` with its `envelope` feature. It is a workspace binary, not a published library crate.
+An HTTP service that verifies [IC-Auth](../../README.md) envelopes and returns the authenticated Internet Computer principal and its effective delegation permissions. It accepts JSON or CBOR request bodies and uses `ic_auth_verifier` with its `envelope` feature. It is a workspace binary.
 
 ## Run locally
 
@@ -19,6 +19,8 @@ SOCKET_ADDR=0.0.0.0:8080 cargo run --release -p ic_auth_verify_server
 Logs are written as structured JSON to stdout. Ctrl+C and, on Unix, SIGTERM trigger graceful shutdown. Verification is local and does not make outbound network calls. The listener serves HTTP; configure HTTPS and browser CORS at your application gateway when needed.
 
 Envelope decoding and signature verification run on blocking workers, with concurrent verification limited to the available CPU parallelism. Requests wait asynchronously for a slot, and verification uses the current time after that wait.
+
+Set `MAX_CERT_TIME_OFFSET_SECS` to the greatest allowed difference between a canister certificate's timestamp and the server clock, in whole seconds. The default is 47 days (4,060,800 seconds). For a five-minute window, start the server with `MAX_CERT_TIME_OFFSET_SECS=300`. The setting applies to all requests, including cached signatures. An invalid setting fails startup.
 
 ## Endpoints
 
@@ -71,11 +73,14 @@ A successful response has status `200`:
 
 ```json
 {
-  "user": "<authenticated principal>"
+  "user": "<authenticated principal>",
+  "permissions": "all"
 }
 ```
 
 For JSON the principal is text; for CBOR it is a byte string. The principal comes from the original envelope public key after successful signature and delegation verification.
+
+`permissions` is `queries` if any verified delegation limits operations to queries and `read_state`. It is `all` for an undelegated signer or a chain whose links all permit updates. A write handler should require `permissions === 'all'` before applying its own authorization policy. This check also covers deployments where an older verifier can still return a response containing only `user`.
 
 The service does not consume `Authorization` or `IC-Auth-*` headers as its verification input. Those helpers are available to applications integrating the [Rust verifier](../ic_auth_verifier/README.md) directly.
 
@@ -121,13 +126,14 @@ For CBOR requests, use `deterministicEncode` on the outer request object, keep e
 - `POST /verify` selects its body parser from `Content-Type` only. It accepts `application/json`, `application/cbor`, and structured suffixes such as `application/vnd.example+cbor`.
 - Successful POST responses use the request's JSON or CBOR format, regardless of `Accept`.
 - `GET /` prefers a supported `Content-Type` header, otherwise negotiates `Accept` with quality values. Missing `Accept` and ordinary wildcards default to JSON. A request offering only unsupported response formats receives `406`.
+- The metadata response includes `Vary: Accept, Content-Type` so HTTP caches can distinguish these representations.
 - Specific `Accept` ranges override wildcards, including `q=0` exclusions. Only JSON and CBOR are response candidates; an unsupported preferred format does not prevent selecting an acceptable supported format.
 - Errors produced while decoding or verifying payloads are plain text. An unsupported request content type returns `415` with no structured error body.
 - Request bodies are limited to 64 KiB; larger bodies receive `413`. A signed envelope, even with a full delegation chain, is a few kilobytes.
 
 | Status | Meaning |
 | --- | --- |
-| `200` | Metadata or verified principal |
+| `200` | Metadata or verified principal and effective permissions |
 | `400` | Malformed JSON/CBOR, invalid field representation or length, or invalid embedded envelope CBOR |
 | `401` | Signature, delegation, target, expiration, or digest verification failed |
 | `406` | No supported response format for `GET /` |
